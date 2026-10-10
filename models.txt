@@ -1,0 +1,16 @@
+# Coding-model tiers for install.sh / install.ps1 (current as of October 2026).
+#
+# Each row: min_budget_GB  light  medium  heavy
+# The installer uses the highest row whose min_budget is <= the machine's memory budget.
+#
+# A cell may list fallbacks separated by "|": the first tag that exists on ollama.com is used.
+# On Apple Silicon, a plain tag like qwen3.8:27b is automatically swapped for its MLX build
+# (qwen3.8:27b-mlx) when one is published. Tags with an explicit variant (like -q8_0) are left alone.
+#
+# min  light                medium               heavy
+0      qwen2.5-coder:1.5b   qwen2.5-coder:3b     qwen2.5-coder:7b
+6      qwen2.5-coder:3b     qwen2.5-coder:7b     gemma4:12b
+10     qwen2.5-coder:7b     qwen2.5-coder:14b    gpt-oss:20b
+16     qwen2.5-coder:7b     gpt-oss:20b          qwen3.8:27b
+28     gpt-oss:20b          qwen3-coder:30b      qwen3.8:27b
+44     qwen3-coder:30b      qwen3.8:27b          qwen3.8:27b-q8_0|qwen3.8:27b
