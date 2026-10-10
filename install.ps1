@@ -205,24 +205,41 @@ $modelsDir = $env:OLLAMA_MODELS
 if (-not $modelsDir) { $modelsDir = Join-Path $HOME '.ollama\models' }
 $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($modelsDir))
 $free = [IO.DriveInfo]::new($root).AvailableFreeSpace
-$total = [int64]0; $todo = @()
 Say "Hardware: $Hw"
 Say "Budget:   ${Budget}GB"
-foreach ($p in $plan) {
+for ($i = 0; $i -lt $plan.Count; $i++) {
+  $p = $plan[$i]
   if (Test-Installed $p.Tag) { $status = 'already installed' }
-  elseif ($todo -contains $p.Tag) { $status = 'same model as above' }
-  else {
-    $todo += $p.Tag; $total += $p.Size
-    if ($p.Size -gt 0) { $status = "$(Human $p.Size) to download" } else { $status = 'download size unknown' }
-  }
-  Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $status)
-  if ($p.Note) { Say "          ($($p.Note))" }
+  elseif ($p.Size -gt 0) { $status = "$(Human $p.Size) download" }
+  else { $status = 'download size unknown' }
+  Say ('  {0}) {1,-7} {2,-28} {3}' -f ($i + 1), $p.Tier, $p.Tag, $status)
+  if ($p.Note) { Say "             ($($p.Note))" }
 }
-Say "Total download: $(Human $total)   Free disk space: $(Human $free) (on $root)"
+
+# Let the user pick which of the models to get. --yes, --tier and --dry-run keep the whole plan.
+$chosen = @($plan); $picked = $false
+if (-not $DryRun -and -not $Yes -and $Tier -eq 'all' -and $plan.Count -gt 1) {
+  $picked = $true
+  while ($true) {
+    $answer = (Read-Host 'Which models do you want? Type numbers (e.g. "1 3"), press Enter for all, or "n" for none').Trim()
+    if ($answer -eq '') { break }
+    if ($answer -match '^(n|no|none)$') { $chosen = @(); break }
+    $nums = @($answer -split '[\s,]+')
+    $bad = @($nums | Where-Object { $_ -notmatch '^\d+$' -or [int]$_ -lt 1 -or [int]$_ -gt $plan.Count })
+    if ($bad.Count -eq 0) { $chosen = @($nums | ForEach-Object { $plan[[int]$_ - 1] }); break }
+    Warn "Please type numbers between 1 and $($plan.Count), separated by spaces."
+  }
+}
+$total = [int64]0; $todo = @()
+foreach ($p in $chosen) {
+  if ((Test-Installed $p.Tag) -or ($todo -contains $p.Tag)) { continue }
+  $todo += $p.Tag; $total += $p.Size
+}
+Say "To download: $($todo.Count) model(s), $(Human $total)   Free disk space: $(Human $free) (on $root)"
 $need = $total + 10 * 1e9
 if ($todo.Count -gt 0 -and $free -lt $need) {
   if ($DryRun) { Warn "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). A real run would stop here."; exit 1 }
-  Die "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). Free up space or use --tier."
+  Die "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). Free up space or pick fewer models."
 }
 $ctx = 32768; if ($Budget -ge 28) { $ctx = 65536 }
 if ($DryRun) {
@@ -231,13 +248,14 @@ if ($DryRun) {
 }
 $failed = @()
 if ($todo.Count -gt 0) {
-  if (-not (Ask "Download $($todo.Count) model(s) now?")) { Die 'Cancelled. Nothing was downloaded.' }
+  if (-not $picked -and -not (Ask "Download $($todo.Count) model(s) now?")) { Die 'Cancelled. Nothing was downloaded.' }
   foreach ($t in $todo) {
     Step "Downloading $t"
     & $ollama pull $t
     if ($LASTEXITCODE -ne 0) { $failed += $t; Warn "Download of $t failed; carrying on." }
   }
-} else { Ok 'All chosen models are already installed.' }
+} elseif ($chosen.Count) { Ok 'The models you chose are already installed.' }
+else { Say 'No models chosen, so nothing to download.' }
 
 # ---------------------------------------------------------------------------
 # Step 5: raise Ollama's context window so coding agents can see enough code
@@ -261,14 +279,25 @@ $uses = @{
   medium = 'everyday coding: writing functions, fixing bugs, reviews'
   heavy  = 'hard problems, big refactors and agent work (slowest, smartest)'
 }
-foreach ($p in $plan) {
-  if ($failed -notcontains $p.Tag) { Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $uses[$p.Tier]) }
+$first = $null
+foreach ($p in $chosen) {
+  if ($failed -contains $p.Tag) { continue }
+  $use = $uses[$p.Tier]
+  if (Test-Installed $p.Tag) { $use += ' [already had it]' }
+  Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $use)
+  if (-not $first) { $first = $p.Tag }
 }
+if (-not $first) { Say '  No models were installed this time.' }
 Say ''
-Say "Try a model:          ollama run $($plan[0].Tag)"
+if ($first) { Say "Try a model:          ollama run $first" }
 if (Get-Command claude -ErrorAction SilentlyContinue) { Say 'Claude Code is installed on this machine, so you can use these models with it.' }
 Say 'Use with Claude Code: ollama launch claude   (then pick a model)'
 Say 'Remove a model:       ollama rm <model>'
 if ($missing.Count) { Warn "Skipped because the tag wasn't found: $($missing -join ', ')" }
+if ($failed.Count) {
+  # A pull fails with "requires a newer version of Ollama" when a model needs a newer release than this one.
+  try { $latest = [version]((Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 -Uri 'https://api.github.com/repos/ollama/ollama/releases/latest').tag_name.TrimStart('v')) } catch { $latest = $null }
+  if ($latest -and $ver -and $ver -lt $latest) { Warn "Your Ollama ($ver) is older than the latest ($latest), and new models often need it. Update with: winget upgrade Ollama.Ollama" }
+}
 if ($failed.Count) { Warn "These downloads failed: $($failed -join ', '). Re-run this script to retry."; exit 1 }
 exit 0

@@ -32,7 +32,7 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
 
 | Flag | What it does |
 |---|---|
-| `--tier light\|medium\|heavy\|all` | Only install one tier (default: `all`) |
+| `--tier light\|medium\|heavy\|all` | Only install one tier, without asking (default: `all`, and you choose from a list) |
 | `--budget <GB>` | Skip detection and use this memory budget |
 | `--dry-run` | Detect hardware and print the plan; changes nothing |
 | `--yes` | Don't ask for confirmation |
@@ -57,9 +57,11 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
    first. It uses Homebrew on macOS (otherwise it points you to the download page), the official
    script on Linux (which uses sudo), and winget on Windows. Then it starts the Ollama server if
    it isn't running.
-5. **Shows the plan and downloads**. It skips models you already have and stops if free disk space
+5. **Lets you choose which models to download.** The plan lists the three models with numbers. Type
+   the ones you want (for example `1 3`), press Enter for all three, or type `n` for none. `--yes` and
+   `--tier` skip this question. It skips models you already have and stops if free disk space
    is less than the downloads plus 10 GB. If one download fails, it continues with the others and
-   lists the failures at the end. It never deletes models.
+   lists the failures at the end. If a model needs a newer Ollama, it tells you how to update. It never deletes models.
 6. **Raises the context window** (`OLLAMA_CONTEXT_LENGTH`) from Ollama's default of 4096 tokens to
    32768, or 65536 when the budget is 28 GB or more, asking first:
    - macOS: `launchctl setenv`, plus an optional line in `~/.zshrc`. Restart the Ollama app afterwards.

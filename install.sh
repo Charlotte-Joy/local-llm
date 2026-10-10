@@ -197,35 +197,65 @@ MODELS_DIR="${OLLAMA_MODELS:-$HOME/.ollama/models}"
 [ "$OS" = Linux ] && [ -z "${OLLAMA_MODELS:-}" ] && [ -d /usr/share/ollama/.ollama ] && MODELS_DIR=/usr/share/ollama/.ollama/models
 d="$MODELS_DIR"; while [ ! -d "$d" ]; do d=$(dirname "$d"); done
 FREE=$(( $(df -Pk "$d" | awk 'NR == 2 { print $4 }') * 1024 ))
-TOTAL=0; TODO=()
 say "Hardware: $HW"
 say "Budget:   ${BUDGET}GB"
 for i in "${!P_TAG[@]}"; do
-  t=${P_TAG[$i]}; s=${P_SIZE[$i]}; size=$( [ "$s" -gt 0 ] && echo "$(human "$s") to download" || echo "download size unknown")
+  t=${P_TAG[$i]}; s=${P_SIZE[$i]}
   if is_installed "$t"; then status="already installed"
-  elif [[ " ${TODO[*]-} " == *" $t "* ]]; then status="same model as above"
-  else status="$size"; TODO+=("$t"); TOTAL=$(( TOTAL + s )); fi
-  printf '  %-7s %-28s %s\n' "${P_TIER[$i]}" "$t" "$status"
-  [ -n "${P_NOTE[$i]}" ] && printf '          (%s)\n' "${P_NOTE[$i]}"
+  elif [ "$s" -gt 0 ]; then status="$(human "$s") download"
+  else status="download size unknown"; fi
+  printf '  %d) %-7s %-28s %s\n' $(( i + 1 )) "${P_TIER[$i]}" "$t" "$status"
+  [ -n "${P_NOTE[$i]}" ] && printf '             (%s)\n' "${P_NOTE[$i]}"
 done
-say "Total download: $(human $TOTAL)   Free disk space: $(human $FREE) (in $d)"
+
+# Let the user pick which of the models to get. --yes, --tier and --dry-run keep the whole plan.
+CHOSEN="${!P_TAG[*]}"; PICKED=0
+if [ "$DRY" = 0 ] && [ "$YES" = 0 ] && [ "$TIER" = all ] && [ ${#P_TAG[@]} -gt 1 ]; then
+  PICKED=1
+  while :; do
+    printf 'Which models do you want? Type numbers (e.g. "1 3"), press Enter for all, or "n" for none: '
+    read -r answer </dev/tty || answer=n
+    case "$answer" in "") break ;; n|N|no|none) CHOSEN=""; break ;; esac
+    CHOSEN=""; valid=1
+    for n in ${answer//,/ }; do
+      if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le ${#P_TAG[@]} ]; then CHOSEN="$CHOSEN $(( n - 1 ))"; else valid=0; fi
+    done
+    [ "$valid" = 1 ] && break
+    warn "Please type numbers between 1 and ${#P_TAG[@]}, separated by spaces."
+  done
+fi
+TOTAL=0; TODO=()
+for i in $CHOSEN; do   # at most 3 models, so the duplicate check below is trivially cheap
+  t=${P_TAG[$i]}
+  is_installed "$t" || [[ " ${TODO[*]-} " == *" $t "* ]] && continue
+  TODO+=("$t"); TOTAL=$(( TOTAL + P_SIZE[i] ))
+done
+say "To download: ${#TODO[@]} model(s), $(human $TOTAL)   Free disk space: $(human $FREE) (in $d)"
 if [ ${#TODO[@]} -gt 0 ] && [ "$FREE" -lt $(( TOTAL + 10 * GB )) ]; then
   [ "$DRY" = 1 ] && { warn "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). A real run would stop here."; exit 1; }
-  die "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). Free up space or use --tier."
+  die "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). Free up space or pick fewer models."
 fi
 CTX=32768; [ "$BUDGET" -ge 28 ] && CTX=65536
 if [ "$DRY" = 1 ]; then
   [ "$NO_CTX" = 0 ] && say "Would set OLLAMA_CONTEXT_LENGTH=$CTX."
   say "Dry run finished. Run without --dry-run to install."; exit 0
 fi
-FAILED=""
+FAILED=""; OUTDATED=0
 if [ ${#TODO[@]} -gt 0 ]; then
-  ask "Download ${#TODO[@]} model(s) now?" || die "Cancelled. Nothing was downloaded."
+  [ "$PICKED" = 1 ] || ask "Download ${#TODO[@]} model(s) now?" || die "Cancelled. Nothing was downloaded."
+  PULL_LOG=$(mktemp)
   for t in "${TODO[@]}"; do
     step "Downloading $t"
-    ollama pull "$t" || { FAILED="$FAILED $t"; warn "Download of $t failed; carrying on."; }
+    # ollama prints progress and errors on stderr; keep showing it but copy it to a log so we can spot version errors.
+    { ollama pull "$t" 2>&1 1>&3 | tee "$PULL_LOG" >&2; rc=${PIPESTATUS[0]}; } 3>&1
+    if [ "$rc" != 0 ]; then
+      FAILED="$FAILED $t"; warn "Download of $t failed; carrying on."
+      grep -q 'newer version of Ollama' "$PULL_LOG" && OUTDATED=1
+    fi
   done
-else ok "All chosen models are already installed."; fi
+  rm -f "$PULL_LOG"
+elif [ -n "$CHOSEN" ]; then ok "The models you chose are already installed."
+else say "No models chosen, so nothing to download."; fi
 
 # ---------------------------------------------------------------------------
 # Step 5: raise Ollama's context window so coding agents can see enough code
@@ -260,7 +290,8 @@ fi
 # Step 6: what's installed and how to use it
 # ---------------------------------------------------------------------------
 step "All done"
-for i in "${!P_TAG[@]}"; do
+FIRST=""
+for i in $CHOSEN; do
   t=${P_TAG[$i]}
   [[ " $FAILED " == *" $t "* ]] && continue
   case ${P_TIER[$i]} in
@@ -268,13 +299,22 @@ for i in "${!P_TAG[@]}"; do
     medium) use="everyday coding: writing functions, fixing bugs, reviews" ;;
     heavy)  use="hard problems, big refactors and agent work (slowest, smartest)" ;;
   esac
+  is_installed "$t" && use="$use [already had it]"
   printf '  %s%-7s%s %-28s %s\n' "$B" "${P_TIER[$i]}" "$N" "$t" "$use"
+  [ -z "$FIRST" ] && FIRST=$t
 done
+[ -z "$FIRST" ] && say "  No models were installed this time."
 say ""
-say "Try a model:          ollama run ${P_TAG[0]}"
+[ -n "$FIRST" ] && say "Try a model:          ollama run $FIRST"
 command -v claude >/dev/null 2>&1 && say "Claude Code is installed on this machine, so you can use these models with it."
 say "Use with Claude Code: ollama launch claude   (then pick a model)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"
+if [ "$OUTDATED" = 1 ]; then
+  if [ "$OS" = Linux ]; then how="re-run the official installer: curl -fsSL https://ollama.com/install.sh | sh"
+  elif brew list --formula ollama >/dev/null 2>&1; then how="run: brew upgrade ollama"
+  else how="download the latest app from https://ollama.com/download"; fi
+  warn "Your Ollama ($V) is too old for some of these models. To update it, $how. Then re-run this script."
+fi
 [ -n "$FAILED" ] && { warn "These downloads failed:$FAILED. Re-run this script to retry."; exit 1; }
 exit 0
