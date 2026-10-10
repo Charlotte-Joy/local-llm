@@ -289,20 +289,14 @@ if [ "$DRY" = 1 ]; then
   [ "$NO_CTX" = 0 ] && say "Would set OLLAMA_CONTEXT_LENGTH=$CTX."
   say "Dry run finished. Run without --dry-run to install."; exit 0
 fi
-FAILED=""; OUTDATED=0
+FAILED=""
 if [ ${#TODO[@]} -gt 0 ]; then
   ask "Download ${#TODO[@]} model(s), $(human $TOTAL) in total?" Y || die "Cancelled. Nothing was downloaded."
-  PULL_LOG=$(mktemp)
   for t in "${TODO[@]}"; do
     step "Downloading $t"
-    # ollama prints progress and errors on stderr; keep showing it but copy it to a log so we can spot version errors.
-    { "$OLLAMA" pull "$t" 2>&1 1>&3 | tee "$PULL_LOG" >&2; rc=${PIPESTATUS[0]}; } 3>&1
-    if [ "$rc" != 0 ]; then
-      FAILED="$FAILED $t"; warn "Download of $t failed; carrying on."
-      grep -q 'newer version of Ollama' "$PULL_LOG" && OUTDATED=1
-    fi
+    # Don't pipe this: ollama sizes its progress bar from the terminal, and through a pipe it redraws as new lines.
+    "$OLLAMA" pull "$t" || { FAILED="$FAILED $t"; warn "Download of $t failed; carrying on."; }
   done
-  rm -f "$PULL_LOG"
 else ok "All of these models are already installed."; fi
 
 # ---------------------------------------------------------------------------
@@ -358,8 +352,8 @@ command -v claude >/dev/null 2>&1 && say "Claude Code is installed on this machi
 say "Use with Claude Code: ollama launch claude   (then pick a model)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"
-if [ "$OUTDATED" = 1 ]; then
-  warn "Your Ollama ($V) is too old for some of these models. Re-run this script and accept the Ollama update."
+if [ -n "$FAILED" ] && [ -n "$LATEST" ] && [ -n "${V:-}" ] && ! ver_ge "$V" "$LATEST"; then
+  warn "Your Ollama ($V) is older than the latest ($LATEST), and new models often need it. Re-run this script and accept the Ollama update."
 fi
 [ -n "$FAILED" ] && { warn "These downloads failed:$FAILED. Re-run this script to retry."; exit 1; }
 exit 0
