@@ -161,6 +161,14 @@ find_ollama() {
   if [ -z "$OLLAMA" ] && [ -x "$APP_BIN" ]; then OLLAMA=$APP_BIN; fi
 }
 ollama_version() { "$OLLAMA" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1; }
+stop_mac_app() { # quit the Ollama app and its server; succeeds once nothing is left running
+  pgrep -f 'Ollama.app/Contents' >/dev/null || return 0
+  osascript -e 'quit app "Ollama"' >/dev/null 2>&1
+  for _ in $(seq 10); do pgrep -f 'Ollama.app/Contents' >/dev/null || return 0; sleep 1; done
+  pkill -f 'Ollama.app/Contents'   # the app can ignore the quit request (seen with 0.23.2)
+  for _ in $(seq 10); do pgrep -f 'Ollama.app/Contents' >/dev/null || return 0; sleep 1; done
+  return 1
+}
 install_mac_app() { # download the official app, check Apple's signature, swap it into /Applications
   local tmp; tmp=$(mktemp -d)
   say "Downloading the Ollama app..."
@@ -169,8 +177,7 @@ install_mac_app() { # download the official app, check Apple's signature, swap i
     warn "The downloaded app failed Apple's signature check, so it was not installed."; return 1
   fi
   if [ -d /Applications/Ollama.app ]; then
-    osascript -e 'quit app "Ollama"' >/dev/null 2>&1
-    for _ in $(seq 15); do pgrep -f 'Ollama.app/Contents' >/dev/null || break; sleep 1; done
+    stop_mac_app || { warn "Couldn't quit the running Ollama. Quit it from the menu bar, then re-run."; return 1; }
     mv /Applications/Ollama.app "$tmp/Ollama-old.app" || { warn "Couldn't move the old app out of /Applications."; return 1; }
   fi
   if ! mv "$tmp/new/Ollama.app" /Applications/; then
@@ -230,10 +237,21 @@ if [ "$DRY" = 0 ] && ! server_up; then
   server_up || die "The Ollama server didn't start within 30 seconds. Try running 'ollama serve' yourself."
 fi
 server_up && ok "Ollama server is running" && INSTALLED=$("$OLLAMA" list 2>/dev/null | awk 'NR > 1 { print $1 }') || INSTALLED=""
-# After an update, a server started earlier may still be the old version until it restarts.
-SERVER_V=$(curl -s -m 2 "$SERVER/api/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-[ -n "$SERVER_V" ] && [ -n "${V:-}" ] && [ "$SERVER_V" != "$V" ] &&
-  warn "The running Ollama server is still version $SERVER_V. Restart Ollama so it uses $V, then re-run this script."
+# After an update, a server started earlier may still be the old version, and new models would be refused.
+server_version() { curl -s -m 2 "$SERVER/api/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+'; }
+SERVER_V=$(server_version)
+if [ -n "$SERVER_V" ] && [ -n "${V:-}" ] && [ "$SERVER_V" != "$V" ]; then
+  if [ "$DRY" = 1 ]; then warn "The running Ollama server is version $SERVER_V, not $V. A real run would restart it."
+  else
+    if [ "$OS" = Darwin ] && [ -d /Applications/Ollama.app ] && ask "The running Ollama server is still $SERVER_V. Restart Ollama so it uses $V?" Y; then
+      stop_mac_app && open -a Ollama
+      for _ in $(seq 30); do [ "$(server_version)" = "$V" ] && break; sleep 1; done
+    fi
+    SERVER_V=$(server_version)
+    [ "$SERVER_V" = "$V" ] || die "The running Ollama server is version ${SERVER_V:-unknown}, not $V. Restart Ollama, then re-run this script."
+    ok "Ollama server restarted on $V"
+  fi
+fi
 is_installed() { printf '%s\n' "$INSTALLED" | grep -qxF "$1" || printf '%s\n' "$INSTALLED" | grep -qxF "$1:latest"; }
 
 # ---------------------------------------------------------------------------

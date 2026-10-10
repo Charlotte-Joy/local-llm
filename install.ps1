@@ -215,9 +215,23 @@ if ($ollama -and (Test-Server)) {
   Ok 'Ollama server is running'
   $installed = @(& $ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] })
 }
-# After an update, a server started earlier may still be the old version until it restarts.
-try { $serverVer = [version](Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Uri "$Server/api/version").version } catch { $serverVer = $null }
-if ($serverVer -and $ver -and $serverVer -ne $ver) { Warn "The running Ollama server is still version $serverVer. Quit Ollama from the system tray, start it again, then re-run this script." }
+# After an update, a server started earlier may still be the old version, and new models would be refused.
+function Get-ServerVersion { try { return [version](Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Uri "$Server/api/version").version } catch { return $null } }
+$serverVer = Get-ServerVersion
+if ($serverVer -and $ver -and $serverVer -ne $ver) {
+  if ($DryRun) { Warn "The running Ollama server is version $serverVer, not $ver. A real run would restart it." }
+  else {
+    $app = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+    if ((Test-Path $app) -and (Ask "The running Ollama server is still $serverVer. Restart Ollama so it uses $ver?" 'Y')) {
+      Get-Process 'ollama app', 'ollama' -ErrorAction SilentlyContinue | Stop-Process -Force
+      Start-Sleep 2; Start-Process $app
+      foreach ($s in 1..30) { if ((Get-ServerVersion) -eq $ver) { break }; Start-Sleep 1 }
+    }
+    $serverVer = Get-ServerVersion
+    if ($serverVer -ne $ver) { Die "The running Ollama server is version $serverVer, not $ver. Quit Ollama from the system tray, start it again, then re-run this script." }
+    Ok "Ollama server restarted on $ver"
+  }
+}
 function Test-Installed($tag) { return ($installed -contains $tag) -or ($installed -contains "${tag}:latest") }
 
 # ---------------------------------------------------------------------------
