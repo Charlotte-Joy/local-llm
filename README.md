@@ -1,7 +1,7 @@
 # Local coding-model installer (Ollama)
 
-Detects your hardware, installs [Ollama](https://ollama.com) if it's missing, and downloads three
-local coding models sized for your machine:
+Detects your hardware, installs or updates [Ollama](https://ollama.com) and
+[Claude Code](https://code.claude.com), and downloads three local coding models sized for your machine:
 
 | Tier | What it's for |
 |---|---|
@@ -37,6 +37,7 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
 | `--dry-run` | Detect hardware and print the plan; changes nothing |
 | `--yes` | Don't ask for confirmation |
 | `--no-context` | Don't change Ollama's context-window setting |
+| `--no-claude` | Don't install or update Claude Code |
 
 ## What it does
 
@@ -64,6 +65,10 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
    - Windows: winget, or the signed official installer if winget is missing.
 
    Then it starts the Ollama server if it isn't running.
+   **Then Claude Code**, which `ollama launch claude` starts. If it's missing, the script offers to
+   install it with the official installer (`curl -fsSL https://claude.ai/install.sh | bash`, or
+   `install.ps1` on Windows). If it's installed, the script asks before updating it with
+   `claude update` (or `brew upgrade` / `winget upgrade` if it came from Homebrew or WinGet).
 5. **Downloads all three models by default** (or only the tiers named with `--tier`), after one
    confirmation. It skips models you already have and stops if free disk space is less than the
    downloads plus 10 GB. If one download fails, it continues with the others and lists the

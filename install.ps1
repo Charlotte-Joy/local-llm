@@ -1,5 +1,5 @@
-# Installs Ollama (if needed) and three local coding models sized for this machine.
-# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
+# Installs or updates Ollama and Claude Code, then three local coding models sized for this machine.
+# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
 
 $ModelsFile = Join-Path $PSScriptRoot 'models.txt'
 $MinOllama  = [version]'0.14.0'
@@ -20,7 +20,7 @@ function Ask($q, $default = 'N') { # with 'Y', pressing Enter means yes; --yes s
 }
 function Human($b) { '{0:N1} GB' -f ($b / 1e9) }
 
-$Tier = 'all'; $BudgetOverride = $null; $DryRun = $false; $Yes = $false; $NoContext = $false
+$Tier = 'all'; $BudgetOverride = $null; $DryRun = $false; $Yes = $false; $NoContext = $false; $NoClaude = $false
 $argv = @($args)
 for ($i = 0; $i -lt $argv.Count; $i++) {
   switch -Regex ($argv[$i]) {
@@ -29,6 +29,7 @@ for ($i = 0; $i -lt $argv.Count; $i++) {
     '^--?dry-?run$'   { $DryRun = $true }
     '^(--?yes|-y)$'   { $Yes = $true }
     '^--?no-?context$' { $NoContext = $true }
+    '^--?no-?claude$' { $NoClaude = $true }
     '^(--?help|-h|/\?)$' { Get-Content $PSCommandPath -TotalCount 3 | Select-Object -Skip 1 | ForEach-Object { $_.TrimStart('# ') }; exit 0 }
     default           { Die "Unknown option: $($argv[$i]) (try --help)" }
   }
@@ -235,6 +236,35 @@ if ($serverVer -and $ver -and $serverVer -ne $ver) {
 function Test-Installed($tag) { return ($installed -contains $tag) -or ($installed -contains "${tag}:latest") }
 
 # ---------------------------------------------------------------------------
+# Step 3b: install or update Claude Code, which `ollama launch claude` starts
+# ---------------------------------------------------------------------------
+$claude = $null
+if (-not $NoClaude) {
+  Step 'Checking Claude Code'
+  $cmd = Get-Command claude -ErrorAction SilentlyContinue
+  if ($cmd) { $claude = $cmd.Source }
+  # The official installer puts claude.exe in ~\.local\bin, which may not be on PATH until a new window opens.
+  $nativeClaude = Join-Path $HOME '.local\bin\claude.exe'
+  if (-not $claude -and (Test-Path $nativeClaude)) { $claude = $nativeClaude }
+  if (-not $claude) {
+    Say 'Claude Code is not installed.'
+    if ($DryRun) { Say '(dry run) Would install Claude Code with the official installer.' }
+    elseif (Ask 'Install Claude Code with the official installer from claude.ai?' 'Y') {
+      # Run the installer in a child PowerShell so anything it does to its own session can't end this script.
+      & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command 'irm https://claude.ai/install.ps1 | iex'
+      if (Test-Path $nativeClaude) { $claude = $nativeClaude } else { Warn "Claude Code didn't install. See https://code.claude.com/docs/en/setup" }
+    } else { Warn "Skipping Claude Code. You'll need it for 'ollama launch claude'." }
+  } elseif ($DryRun) { Say 'Claude Code is installed. (dry run) Would update it to the latest version.' }
+  elseif (Ask "Claude Code $((& $claude --version 2>$null | Select-Object -First 1) -replace ' \(Claude Code\)','') is installed. Update it to the latest version?" 'Y') {
+    $viaWinget = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) { [void](winget list --id Anthropic.ClaudeCode -e 2>$null); $viaWinget = ($LASTEXITCODE -eq 0) }
+    if ($viaWinget) { winget upgrade --id Anthropic.ClaudeCode -e } else { & $claude update }
+    if ($LASTEXITCODE -ne 0) { Warn "Claude Code couldn't be updated; carrying on with the installed version." }
+  } else { Say 'Keeping the installed Claude Code.' }
+  if ($claude -and (Test-Path $claude)) { Ok (& $claude --version 2>$null | Select-Object -First 1) }
+}
+
+# ---------------------------------------------------------------------------
 # Step 4: summary, disk check, confirm, download
 # ---------------------------------------------------------------------------
 Step 'Plan'
@@ -312,8 +342,8 @@ foreach ($p in $plan) {
 if (-not $first) { Say '  No models were installed this time.' }
 Say ''
 if ($first) { Say "Try a model:          ollama run $first" }
-if (Get-Command claude -ErrorAction SilentlyContinue) { Say 'Claude Code is installed on this machine, so you can use these models with it.' }
 Say 'Use with Claude Code: ollama launch claude   (then pick a model)'
+if ($claude -and -not (Get-Command claude -ErrorAction SilentlyContinue)) { Say "                      (open a new PowerShell window first so 'claude' is on your PATH)" }
 Say 'Remove a model:       ollama rm <model>'
 if ($missing.Count) { Warn "Skipped because the tag wasn't found: $($missing -join ', ')" }
 if ($failed.Count -and $latest -and $ver -and $ver -lt $latest) { Warn "Your Ollama ($ver) is older than the latest ($latest), and new models often need it. Re-run this script and accept the Ollama update." }

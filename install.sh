@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs Ollama (if needed) and three local coding models sized for this machine.
-# macOS + Linux. Usage: ./install.sh [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
+# Installs or updates Ollama and Claude Code, then three local coding models sized for this machine.
+# macOS + Linux. Usage: ./install.sh [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,7 +27,7 @@ human() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 gib()   { awk -v b="$1" 'BEGIN { printf "%d", b / 1073741824 + 0.5 }'; }   # bytes -> whole GB
 ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$2" ]; }  # $1 >= $2
 
-TIER=all; BUDGET_OVERRIDE=""; DRY=0; YES=0; NO_CTX=0
+TIER=all; BUDGET_OVERRIDE=""; DRY=0; YES=0; NO_CTX=0; NO_CLAUDE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tier) TIER="${2:-}"; shift ;;
@@ -35,6 +35,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --yes|-y) YES=1 ;;
     --no-context) NO_CTX=1 ;;
+    --no-claude) NO_CLAUDE=1 ;;
     -h|--help) sed -n '2,3p' "$0" | sed 's/^# //'; exit 0 ;;
     *) die "Unknown option: $1 (try --help)" ;;
   esac
@@ -255,6 +256,32 @@ fi
 is_installed() { printf '%s\n' "$INSTALLED" | grep -qxF "$1" || printf '%s\n' "$INSTALLED" | grep -qxF "$1:latest"; }
 
 # ---------------------------------------------------------------------------
+# Step 3b: install or update Claude Code, which `ollama launch claude` starts
+# ---------------------------------------------------------------------------
+CLAUDE=""
+if [ "$NO_CLAUDE" = 0 ]; then
+  step "Checking Claude Code"
+  CLAUDE=$(command -v claude 2>/dev/null || true)
+  # The official installer puts claude in ~/.local/bin, which may not be on PATH until a new terminal opens.
+  if [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ]; then CLAUDE="$HOME/.local/bin/claude"; fi
+  if [ -z "$CLAUDE" ]; then
+    say "Claude Code is not installed."
+    if [ "$DRY" = 1 ]; then say "(dry run) Would install Claude Code with the official installer."
+    elif ask "Install Claude Code with the official installer from claude.ai?" Y; then
+      if curl -fsSL https://claude.ai/install.sh | bash; then CLAUDE="$HOME/.local/bin/claude"
+      else warn "Claude Code didn't install. See https://code.claude.com/docs/en/setup"; fi
+    else warn "Skipping Claude Code. You'll need it for 'ollama launch claude'."; fi
+  elif [ "$DRY" = 1 ]; then say "Claude Code is installed. (dry run) Would update it to the latest version."
+  elif ask "Claude Code $("$CLAUDE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) is installed. Update it to the latest version?" Y; then
+    if command -v brew >/dev/null 2>&1 && brew list --cask claude-code@latest >/dev/null 2>&1; then brew upgrade --cask claude-code@latest
+    elif command -v brew >/dev/null 2>&1 && brew list --cask claude-code >/dev/null 2>&1; then brew upgrade --cask claude-code
+    else "$CLAUDE" update; fi || warn "Claude Code couldn't be updated; carrying on with the installed version."
+  else say "Keeping the installed Claude Code."
+  fi
+  [ -n "$CLAUDE" ] && [ -x "$CLAUDE" ] && ok "$("$CLAUDE" --version 2>/dev/null | head -1)"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 4: summary, disk check, confirm, download
 # ---------------------------------------------------------------------------
 step "Plan"
@@ -348,8 +375,8 @@ done
 [ -z "$FIRST" ] && say "  No models were installed this time."
 say ""
 [ -n "$FIRST" ] && say "Try a model:          ollama run $FIRST"
-command -v claude >/dev/null 2>&1 && say "Claude Code is installed on this machine, so you can use these models with it."
 say "Use with Claude Code: ollama launch claude   (then pick a model)"
+[ -n "$CLAUDE" ] && ! command -v claude >/dev/null 2>&1 && say "                      (open a new terminal first so 'claude' is on your PATH)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"
 if [ -n "$FAILED" ] && [ -n "$LATEST" ] && [ -n "${V:-}" ] && ! ver_ge "$V" "$LATEST"; then
