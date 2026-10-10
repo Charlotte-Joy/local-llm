@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs Ollama (if needed) and three local coding models sized for this machine.
-# macOS + Linux. Usage: ./install.sh [--tier light|medium|heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
+# macOS + Linux. Usage: ./install.sh [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -16,9 +16,11 @@ step() { printf '\n%s==> %s%s\n' "$B" "$*" "$N"; }
 ok()   { printf '%s[ok]%s %s\n' "$G" "$N" "$*"; }
 warn() { printf '%sWarning: %s%s\n' "$Y" "$*" "$N" >&2; }
 die()  { printf '%sError: %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
-ask()  { # ask "question" -> success if the user says yes (always yes with --yes)
+ask()  { # ask "question" [Y] -> success if the user says yes. With Y, pressing Enter means yes. --yes skips it.
   [ "$YES" = 1 ] && return 0
-  local a; printf '%s [y/N] ' "$1"; read -r a </dev/tty || return 1
+  local a hint="[y/N]"; [ "${2:-}" = Y ] && hint="[Y/n]"
+  printf '%s %s ' "$1" "$hint"; read -r a </dev/tty || return 1
+  [ -z "$a" ] && [ "${2:-}" = Y ] && return 0
   case "$a" in y|Y|yes|Yes|YES) return 0 ;; *) return 1 ;; esac
 }
 human() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
@@ -38,7 +40,17 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-case "$TIER" in light|medium|heavy|all) ;; *) die "--tier must be light, medium, heavy or all" ;; esac
+WANT=""
+for t in $(printf '%s' "$TIER" | tr ',' ' ' | tr 'A-Z' 'a-z'); do
+  case "$t" in
+    all) WANT="light medium heavy" ;;
+    light|low) WANT="$WANT light" ;;
+    medium|mid) WANT="$WANT medium" ;;
+    heavy|high) WANT="$WANT heavy" ;;
+    *) WANT=""; break ;;
+  esac
+done
+[ -n "$WANT" ] || die "--tier takes light, medium, heavy or all. Pick several with commas, e.g. --tier light,medium"
 if [ -n "$BUDGET_OVERRIDE" ] && ! [[ "$BUDGET_OVERRIDE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   die "--budget needs a number of GB, e.g. --budget 24"
 fi
@@ -131,7 +143,7 @@ resolve() { # "a|b" -> sets TAG, SIZE, NOTE (TAG empty if nothing exists)
 }
 P_TIER=(); P_TAG=(); P_SIZE=(); P_NOTE=(); MISSING=""
 for i in 0 1 2; do
-  [ "$TIER" = all ] || [ "$TIER" = "${TIERS[$i]}" ] || continue
+  [[ " $WANT " == *" ${TIERS[$i]} "* ]] || continue
   resolve "${SPECS[$i]}"
   if [ -z "$TAG" ]; then warn "${TIERS[$i]}: $NOTE"; MISSING="$MISSING ${TIERS[$i]}"; continue; fi
   P_TIER+=("${TIERS[$i]}"); P_TAG+=("$TAG"); P_SIZE+=("$SIZE"); P_NOTE+=("$NOTE")
@@ -142,37 +154,68 @@ done
 # Step 3: make sure Ollama is installed, new enough and running
 # ---------------------------------------------------------------------------
 step "Checking Ollama"
-ollama_version() { ollama --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1; }
-install_ollama() { # $1 = install|upgrade
-  if [ "$OS" = Darwin ]; then
-    if command -v brew >/dev/null 2>&1 && { [ "$1" = install ] || brew list --formula ollama >/dev/null 2>&1; }; then
-      ask "$1 Ollama with Homebrew (brew $1 ollama)?" || return 1
-      brew "$1" ollama
-    else
-      say "Please download the Ollama app from https://ollama.com/download, open it once, then re-run this script."
-      return 1
-    fi
-  else
-    say "The official Ollama installer (https://ollama.com/install.sh) needs sudo to install system-wide."
-    ask "Run it now?" || return 1
-    curl -fsSL https://ollama.com/install.sh | sh
-  fi
+APP_BIN=/Applications/Ollama.app/Contents/Resources/ollama
+find_ollama() {
+  OLLAMA=$(command -v ollama 2>/dev/null || true)
+  # A freshly installed Mac app hasn't put its CLI on PATH yet, so use the copy inside the app.
+  if [ -z "$OLLAMA" ] && [ -x "$APP_BIN" ]; then OLLAMA=$APP_BIN; fi
 }
-if ! command -v ollama >/dev/null 2>&1; then
+ollama_version() { "$OLLAMA" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1; }
+install_mac_app() { # download the official app, check Apple's signature, swap it into /Applications
+  local tmp; tmp=$(mktemp -d)
+  say "Downloading the Ollama app..."
+  curl -fL --progress-bar -o "$tmp/Ollama.zip" https://ollama.com/download/Ollama-darwin.zip || { warn "Download failed."; return 1; }
+  if ! ditto -x -k "$tmp/Ollama.zip" "$tmp/new" || ! codesign --verify --deep --strict "$tmp/new/Ollama.app" 2>/dev/null; then
+    warn "The downloaded app failed Apple's signature check, so it was not installed."; return 1
+  fi
+  if [ -d /Applications/Ollama.app ]; then
+    osascript -e 'quit app "Ollama"' >/dev/null 2>&1
+    for _ in $(seq 15); do pgrep -f 'Ollama.app/Contents' >/dev/null || break; sleep 1; done
+    mv /Applications/Ollama.app "$tmp/Ollama-old.app" || { warn "Couldn't move the old app out of /Applications."; return 1; }
+  fi
+  if ! mv "$tmp/new/Ollama.app" /Applications/; then
+    [ -d "$tmp/Ollama-old.app" ] && mv "$tmp/Ollama-old.app" /Applications/
+    warn "Couldn't copy the new app into /Applications."; return 1
+  fi
+  open -a Ollama
+  ok "Ollama app installed${LATEST:+ ($LATEST)}. Any previous version was kept in $tmp"
+}
+install_ollama() { # $1 = Install|Update
+  local method label
+  if [ "$OS" = Linux ]; then method=script; label="the official installer from ollama.com (uses sudo)"
+  elif brew list --formula ollama >/dev/null 2>&1; then method=brew; label="Homebrew (brew upgrade ollama)"
+  elif [ "$1" = Install ] && command -v brew >/dev/null 2>&1; then method=brew; label="Homebrew (brew install ollama)"
+  else method=app; label="the official Mac app from ollama.com"; fi
+  ask "$1 Ollama${LATEST:+ to $LATEST} with $label?" Y || return 1
+  case $method in
+    script) curl -fsSL https://ollama.com/install.sh | sh ;;
+    brew) if [ "$1" = Install ]; then brew install ollama; else brew upgrade ollama; fi ;;
+    app) install_mac_app ;;
+  esac
+}
+LATEST=$(curl -fsS -m 10 https://api.github.com/repos/ollama/ollama/releases/latest 2>/dev/null |
+         grep -m1 '"tag_name"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+[ -n "$LATEST" ] || warn "Couldn't look up the latest Ollama version (offline?), so it won't be updated."
+find_ollama
+if [ -z "$OLLAMA" ]; then
   say "Ollama is not installed."
-  if [ "$DRY" = 1 ]; then say "(dry run) Would install Ollama now."
-  else install_ollama install || die "Ollama is required. Install it, then re-run this script."
-       command -v ollama >/dev/null 2>&1 || die "Ollama still isn't on your PATH. Open a new terminal and re-run."
+  if [ "$DRY" = 1 ]; then say "(dry run) Would install Ollama${LATEST:+ $LATEST} now."
+  else
+    install_ollama Install || die "Ollama is required. Install it from https://ollama.com/download, then re-run this script."
+    find_ollama; [ -n "$OLLAMA" ] || die "Ollama was installed but can't be found yet. Open a new terminal and re-run."
   fi
 fi
-if command -v ollama >/dev/null 2>&1; then
+if [ -n "$OLLAMA" ]; then
   V=$(ollama_version)
-  if [ -n "$V" ] && ver_ge "$V" "$MIN_OLLAMA"; then ok "Ollama $V"
-  else
-    warn "Ollama ${V:-(unknown version)} is older than $MIN_OLLAMA, which Claude Code needs."
-    if [ "$DRY" = 1 ]; then say "(dry run) Would offer to upgrade."
-    else install_ollama upgrade || die "Please upgrade Ollama to $MIN_OLLAMA or newer, then re-run."; fi
+  if [ -n "$LATEST" ] && [ -n "$V" ] && ! ver_ge "$V" "$LATEST"; then
+    say "Ollama $V is installed; the latest is $LATEST."
+    if [ "$DRY" = 1 ]; then say "(dry run) Would update Ollama to $LATEST."
+    elif install_ollama Update; then find_ollama; V=$(ollama_version)
+    else warn "Keeping Ollama $V. Newer models may refuse to download."; fi
   fi
+  if [ -n "$V" ] && ver_ge "$V" "$MIN_OLLAMA"; then ok "Ollama $V"
+  elif [ "$DRY" = 1 ]; then warn "Ollama ${V:-(unknown version)} is older than $MIN_OLLAMA, which Claude Code needs."
+  else die "Ollama ${V:-(unknown version)} is older than $MIN_OLLAMA, which Claude Code needs. Update it, then re-run."; fi
 fi
 
 server_up() { curl -s -m 2 -o /dev/null "$SERVER"; }
@@ -181,12 +224,16 @@ if [ "$DRY" = 0 ] && ! server_up; then
   if [ "$OS" = Darwin ] && [ -d /Applications/Ollama.app ]; then open -a Ollama
   elif [ "$OS" = Linux ] && systemctl cat ollama >/dev/null 2>&1; then
     ask "Start the ollama system service (uses sudo)?" && sudo systemctl start ollama
-  else mkdir -p "$HOME/.ollama"; nohup ollama serve >"$HOME/.ollama/serve.log" 2>&1 &
+  else mkdir -p "$HOME/.ollama"; nohup "$OLLAMA" serve >"$HOME/.ollama/serve.log" 2>&1 &
   fi
   for _ in $(seq 30); do server_up && break; sleep 1; done
   server_up || die "The Ollama server didn't start within 30 seconds. Try running 'ollama serve' yourself."
 fi
-server_up && ok "Ollama server is running" && INSTALLED=$(ollama list 2>/dev/null | awk 'NR > 1 { print $1 }') || INSTALLED=""
+server_up && ok "Ollama server is running" && INSTALLED=$("$OLLAMA" list 2>/dev/null | awk 'NR > 1 { print $1 }') || INSTALLED=""
+# After an update, a server started earlier may still be the old version until it restarts.
+SERVER_V=$(curl -s -m 2 "$SERVER/api/version" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+[ -n "$SERVER_V" ] && [ -n "${V:-}" ] && [ "$SERVER_V" != "$V" ] &&
+  warn "The running Ollama server is still version $SERVER_V. Restart Ollama so it uses $V, then re-run this script."
 is_installed() { printf '%s\n' "$INSTALLED" | grep -qxF "$1" || printf '%s\n' "$INSTALLED" | grep -qxF "$1:latest"; }
 
 # ---------------------------------------------------------------------------
@@ -204,28 +251,12 @@ for i in "${!P_TAG[@]}"; do
   if is_installed "$t"; then status="already installed"
   elif [ "$s" -gt 0 ]; then status="$(human "$s") download"
   else status="download size unknown"; fi
-  printf '  %d) %-7s %-28s %s\n' $(( i + 1 )) "${P_TIER[$i]}" "$t" "$status"
-  [ -n "${P_NOTE[$i]}" ] && printf '             (%s)\n' "${P_NOTE[$i]}"
+  printf '  %-7s %-28s %s\n' "${P_TIER[$i]}" "$t" "$status"
+  [ -n "${P_NOTE[$i]}" ] && printf '          (%s)\n' "${P_NOTE[$i]}"
 done
 
-# Let the user pick which of the models to get. --yes, --tier and --dry-run keep the whole plan.
-CHOSEN="${!P_TAG[*]}"; PICKED=0
-if [ "$DRY" = 0 ] && [ "$YES" = 0 ] && [ "$TIER" = all ] && [ ${#P_TAG[@]} -gt 1 ]; then
-  PICKED=1
-  while :; do
-    printf 'Which models do you want? Type numbers (e.g. "1 3"), press Enter for all, or "n" for none: '
-    read -r answer </dev/tty || answer=n
-    case "$answer" in "") break ;; n|N|no|none) CHOSEN=""; break ;; esac
-    CHOSEN=""; valid=1
-    for n in ${answer//,/ }; do
-      if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le ${#P_TAG[@]} ]; then CHOSEN="$CHOSEN $(( n - 1 ))"; else valid=0; fi
-    done
-    [ "$valid" = 1 ] && break
-    warn "Please type numbers between 1 and ${#P_TAG[@]}, separated by spaces."
-  done
-fi
 TOTAL=0; TODO=()
-for i in $CHOSEN; do   # at most 3 models, so the duplicate check below is trivially cheap
+for i in "${!P_TAG[@]}"; do   # at most 3 models, so the duplicate check below is trivially cheap
   t=${P_TAG[$i]}
   is_installed "$t" || [[ " ${TODO[*]-} " == *" $t "* ]] && continue
   TODO+=("$t"); TOTAL=$(( TOTAL + P_SIZE[i] ))
@@ -233,7 +264,7 @@ done
 say "To download: ${#TODO[@]} model(s), $(human $TOTAL)   Free disk space: $(human $FREE) (in $d)"
 if [ ${#TODO[@]} -gt 0 ] && [ "$FREE" -lt $(( TOTAL + 10 * GB )) ]; then
   [ "$DRY" = 1 ] && { warn "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). A real run would stop here."; exit 1; }
-  die "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). Free up space or pick fewer models."
+  die "Not enough disk space: need $(human $(( TOTAL + 10 * GB ))) free (downloads + 10 GB headroom). Free up space or pick fewer with --tier."
 fi
 CTX=32768; [ "$BUDGET" -ge 28 ] && CTX=65536
 if [ "$DRY" = 1 ]; then
@@ -242,20 +273,19 @@ if [ "$DRY" = 1 ]; then
 fi
 FAILED=""; OUTDATED=0
 if [ ${#TODO[@]} -gt 0 ]; then
-  [ "$PICKED" = 1 ] || ask "Download ${#TODO[@]} model(s) now?" || die "Cancelled. Nothing was downloaded."
+  ask "Download ${#TODO[@]} model(s), $(human $TOTAL) in total?" Y || die "Cancelled. Nothing was downloaded."
   PULL_LOG=$(mktemp)
   for t in "${TODO[@]}"; do
     step "Downloading $t"
     # ollama prints progress and errors on stderr; keep showing it but copy it to a log so we can spot version errors.
-    { ollama pull "$t" 2>&1 1>&3 | tee "$PULL_LOG" >&2; rc=${PIPESTATUS[0]}; } 3>&1
+    { "$OLLAMA" pull "$t" 2>&1 1>&3 | tee "$PULL_LOG" >&2; rc=${PIPESTATUS[0]}; } 3>&1
     if [ "$rc" != 0 ]; then
       FAILED="$FAILED $t"; warn "Download of $t failed; carrying on."
       grep -q 'newer version of Ollama' "$PULL_LOG" && OUTDATED=1
     fi
   done
   rm -f "$PULL_LOG"
-elif [ -n "$CHOSEN" ]; then ok "The models you chose are already installed."
-else say "No models chosen, so nothing to download."; fi
+else ok "All of these models are already installed."; fi
 
 # ---------------------------------------------------------------------------
 # Step 5: raise Ollama's context window so coding agents can see enough code
@@ -291,7 +321,7 @@ fi
 # ---------------------------------------------------------------------------
 step "All done"
 FIRST=""
-for i in $CHOSEN; do
+for i in "${!P_TAG[@]}"; do
   t=${P_TAG[$i]}
   [[ " $FAILED " == *" $t "* ]] && continue
   case ${P_TIER[$i]} in
@@ -311,10 +341,7 @@ say "Use with Claude Code: ollama launch claude   (then pick a model)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"
 if [ "$OUTDATED" = 1 ]; then
-  if [ "$OS" = Linux ]; then how="re-run the official installer: curl -fsSL https://ollama.com/install.sh | sh"
-  elif brew list --formula ollama >/dev/null 2>&1; then how="run: brew upgrade ollama"
-  else how="download the latest app from https://ollama.com/download"; fi
-  warn "Your Ollama ($V) is too old for some of these models. To update it, $how. Then re-run this script."
+  warn "Your Ollama ($V) is too old for some of these models. Re-run this script and accept the Ollama update."
 fi
 [ -n "$FAILED" ] && { warn "These downloads failed:$FAILED. Re-run this script to retry."; exit 1; }
 exit 0

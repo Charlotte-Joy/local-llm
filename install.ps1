@@ -1,5 +1,5 @@
 # Installs Ollama (if needed) and three local coding models sized for this machine.
-# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--tier light|medium|heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
+# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context]
 
 $ModelsFile = Join-Path $PSScriptRoot 'models.txt'
 $MinOllama  = [version]'0.14.0'
@@ -13,7 +13,11 @@ function Step($m) { Write-Host ''; Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok($m)   { Write-Host "[ok] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "Warning: $m" -ForegroundColor Yellow }
 function Die($m)  { Write-Host "Error: $m" -ForegroundColor Red; exit 1 }
-function Ask($q)  { if ($Yes) { return $true }; return ((Read-Host "$q [y/N]") -match '^(y|yes)$') }
+function Ask($q, $default = 'N') { # with 'Y', pressing Enter means yes; --yes skips the question
+  if ($Yes) { return $true }
+  if ($default -eq 'Y') { $a = Read-Host "$q [Y/n]"; return ($a -eq '' -or $a -match '^(y|yes)$') }
+  return ((Read-Host "$q [y/N]") -match '^(y|yes)$')
+}
 function Human($b) { '{0:N1} GB' -f ($b / 1e9) }
 
 $Tier = 'all'; $BudgetOverride = $null; $DryRun = $false; $Yes = $false; $NoContext = $false
@@ -29,7 +33,13 @@ for ($i = 0; $i -lt $argv.Count; $i++) {
     default           { Die "Unknown option: $($argv[$i]) (try --help)" }
   }
 }
-if ($Tier -notin 'light', 'medium', 'heavy', 'all') { Die '--tier must be light, medium, heavy or all' }
+$tierAliases = @{ all = 'light', 'medium', 'heavy'; light = 'light'; low = 'light'; medium = 'medium'; mid = 'medium'; heavy = 'heavy'; high = 'heavy' }
+$want = @(); $badTier = $false
+foreach ($t in ($Tier -split ',')) {
+  $t = $t.Trim()
+  if ($tierAliases.ContainsKey($t)) { $want += $tierAliases[$t] } else { $badTier = $true }
+}
+if ($badTier -or $want.Count -eq 0) { Die '--tier takes light, medium, heavy or all. Pick several with commas, e.g. --tier light,medium' }
 if ($BudgetOverride -and $BudgetOverride -notmatch '^\d+(\.\d+)?$') { Die '--budget needs a number of GB, e.g. --budget 24' }
 if ($env:OS -ne 'Windows_NT') { Die 'This script is for Windows. On macOS or Linux, run install.sh instead.' }
 if (-not (Test-Path $ModelsFile)) { Die "Can't read $ModelsFile (it must sit next to this script)." }
@@ -113,7 +123,7 @@ function Get-ManifestSize($tag) { # -> 'missing', 'unknown', or total download b
 $tierNames = 'light', 'medium', 'heavy'
 $plan = @(); $missing = @()
 foreach ($n in 0..2) {   # O(tiers x fallbacks): a handful of registry lookups
-  if ($Tier -ne 'all' -and $Tier -ne $tierNames[$n]) { continue }
+  if ($want -notcontains $tierNames[$n]) { continue }
   $alts = $row.Specs[$n] -split '\|'
   $pick = $null
   foreach ($alt in $alts) {
@@ -145,41 +155,51 @@ function Get-OllamaVersion($exe) {
   if ($found.Count) { return [version]$found[$found.Count - 1].Value }
   return $null
 }
-function Install-Ollama($verb) { # install | upgrade
-  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-    Say 'Please download Ollama from https://ollama.com/download, run the installer, then re-run this script.'
-    return $false
+function Install-Ollama($verb) { # Install | Update
+  $target = ''; if ($latest) { $target = " to $latest" }
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    if (-not (Ask "$verb Ollama$target with winget?" 'Y')) { return $false }
+    $action = 'install'; if ($verb -eq 'Update') { $action = 'upgrade' }
+    $wingetArgs = @($action, '--id', 'Ollama.Ollama', '-e')
+    if ($Yes) { $wingetArgs += '--accept-package-agreements', '--accept-source-agreements' }
+    & winget @wingetArgs
+  } else {
+    if (-not (Ask "$verb Ollama$target with the official installer from ollama.com?" 'Y')) { return $false }
+    $setup = Join-Path $env:TEMP 'OllamaSetup.exe'
+    $ProgressPreference = 'SilentlyContinue'   # PowerShell 5.1's progress bar slows big downloads to a crawl
+    Say 'Downloading the Ollama installer...'
+    try { Invoke-WebRequest -UseBasicParsing -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $setup }
+    catch { Warn "Download failed: $($_.Exception.Message)"; return $false }
+    if ((Get-AuthenticodeSignature $setup).Status -ne 'Valid') { Warn "The installer isn't validly signed, so it was not run."; return $false }
+    Start-Process $setup -Wait
   }
-  if (-not (Ask "$verb Ollama with winget (winget $verb Ollama.Ollama)?")) { return $false }
-  $wingetArgs = @($verb, '--id', 'Ollama.Ollama', '-e')
-  if ($Yes) { $wingetArgs += '--accept-package-agreements', '--accept-source-agreements' }
-  & winget @wingetArgs
-  # winget changes PATH for new windows only; refresh it for this one.
+  # Installers change PATH for new windows only; refresh it for this one.
   $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
   return $true
 }
+try { $latest = [version]((Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 -Uri 'https://api.github.com/repos/ollama/ollama/releases/latest').tag_name.TrimStart('v')) }
+catch { $latest = $null; Warn "Couldn't look up the latest Ollama version (offline?), so it won't be updated." }
 $ollama = Find-Ollama
 if (-not $ollama) {
   Say 'Ollama is not installed.'
-  if ($DryRun) { Say '(dry run) Would install Ollama now.' }
+  if ($DryRun) { Say "(dry run) Would install Ollama $latest now." }
   else {
-    if (-not (Install-Ollama 'install')) { Die 'Ollama is required. Install it, then re-run this script.' }
+    if (-not (Install-Ollama 'Install')) { Die 'Ollama is required. Install it from https://ollama.com/download, then re-run this script.' }
     $ollama = Find-Ollama
-    if (-not $ollama) { Die "Ollama still can't be found. Open a new PowerShell window and re-run." }
+    if (-not $ollama) { Die "Ollama was installed but can't be found yet. Open a new PowerShell window and re-run." }
   }
 }
 if ($ollama) {
   $ver = Get-OllamaVersion $ollama
-  if ($ver -and $ver -ge $MinOllama) { Ok "Ollama $ver" }
-  else {
-    Warn "Ollama $ver is older than $MinOllama, which Claude Code needs."
-    if ($DryRun) { Say '(dry run) Would offer to upgrade.' }
-    else {
-      [void](Install-Ollama 'upgrade'); $ver = Get-OllamaVersion $ollama
-      if (-not $ver -or $ver -lt $MinOllama) { Die "Please upgrade Ollama to $MinOllama or newer, then re-run." }
-      Ok "Ollama $ver"
-    }
+  if ($latest -and $ver -and $ver -lt $latest) {
+    Say "Ollama $ver is installed; the latest is $latest."
+    if ($DryRun) { Say "(dry run) Would update Ollama to $latest." }
+    elseif (Install-Ollama 'Update') { $ollama = Find-Ollama; $ver = Get-OllamaVersion $ollama }
+    else { Warn "Keeping Ollama $ver. Newer models may refuse to download." }
   }
+  if ($ver -and $ver -ge $MinOllama) { Ok "Ollama $ver" }
+  elseif ($DryRun) { Warn "Ollama $ver is older than $MinOllama, which Claude Code needs." }
+  else { Die "Ollama $ver is older than $MinOllama, which Claude Code needs. Update it, then re-run." }
 }
 
 function Test-Server { try { [void](Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $Server); return $true } catch { return $false } }
@@ -195,6 +215,9 @@ if ($ollama -and (Test-Server)) {
   Ok 'Ollama server is running'
   $installed = @(& $ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] })
 }
+# After an update, a server started earlier may still be the old version until it restarts.
+try { $serverVer = [version](Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Uri "$Server/api/version").version } catch { $serverVer = $null }
+if ($serverVer -and $ver -and $serverVer -ne $ver) { Warn "The running Ollama server is still version $serverVer. Quit Ollama from the system tray, start it again, then re-run this script." }
 function Test-Installed($tag) { return ($installed -contains $tag) -or ($installed -contains "${tag}:latest") }
 
 # ---------------------------------------------------------------------------
@@ -212,26 +235,12 @@ for ($i = 0; $i -lt $plan.Count; $i++) {
   if (Test-Installed $p.Tag) { $status = 'already installed' }
   elseif ($p.Size -gt 0) { $status = "$(Human $p.Size) download" }
   else { $status = 'download size unknown' }
-  Say ('  {0}) {1,-7} {2,-28} {3}' -f ($i + 1), $p.Tier, $p.Tag, $status)
-  if ($p.Note) { Say "             ($($p.Note))" }
+  Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $status)
+  if ($p.Note) { Say "          ($($p.Note))" }
 }
 
-# Let the user pick which of the models to get. --yes, --tier and --dry-run keep the whole plan.
-$chosen = @($plan); $picked = $false
-if (-not $DryRun -and -not $Yes -and $Tier -eq 'all' -and $plan.Count -gt 1) {
-  $picked = $true
-  while ($true) {
-    $answer = (Read-Host 'Which models do you want? Type numbers (e.g. "1 3"), press Enter for all, or "n" for none').Trim()
-    if ($answer -eq '') { break }
-    if ($answer -match '^(n|no|none)$') { $chosen = @(); break }
-    $nums = @($answer -split '[\s,]+')
-    $bad = @($nums | Where-Object { $_ -notmatch '^\d+$' -or [int]$_ -lt 1 -or [int]$_ -gt $plan.Count })
-    if ($bad.Count -eq 0) { $chosen = @($nums | ForEach-Object { $plan[[int]$_ - 1] }); break }
-    Warn "Please type numbers between 1 and $($plan.Count), separated by spaces."
-  }
-}
 $total = [int64]0; $todo = @()
-foreach ($p in $chosen) {
+foreach ($p in $plan) {
   if ((Test-Installed $p.Tag) -or ($todo -contains $p.Tag)) { continue }
   $todo += $p.Tag; $total += $p.Size
 }
@@ -239,7 +248,7 @@ Say "To download: $($todo.Count) model(s), $(Human $total)   Free disk space: $(
 $need = $total + 10 * 1e9
 if ($todo.Count -gt 0 -and $free -lt $need) {
   if ($DryRun) { Warn "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). A real run would stop here."; exit 1 }
-  Die "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). Free up space or pick fewer models."
+  Die "Not enough disk space: need $(Human $need) free (downloads + 10 GB headroom). Free up space or pick fewer with --tier."
 }
 $ctx = 32768; if ($Budget -ge 28) { $ctx = 65536 }
 if ($DryRun) {
@@ -248,14 +257,13 @@ if ($DryRun) {
 }
 $failed = @()
 if ($todo.Count -gt 0) {
-  if (-not $picked -and -not (Ask "Download $($todo.Count) model(s) now?")) { Die 'Cancelled. Nothing was downloaded.' }
+  if (-not (Ask "Download $($todo.Count) model(s), $(Human $total) in total?" 'Y')) { Die 'Cancelled. Nothing was downloaded.' }
   foreach ($t in $todo) {
     Step "Downloading $t"
     & $ollama pull $t
     if ($LASTEXITCODE -ne 0) { $failed += $t; Warn "Download of $t failed; carrying on." }
   }
-} elseif ($chosen.Count) { Ok 'The models you chose are already installed.' }
-else { Say 'No models chosen, so nothing to download.' }
+} else { Ok 'All of these models are already installed.' }
 
 # ---------------------------------------------------------------------------
 # Step 5: raise Ollama's context window so coding agents can see enough code
@@ -280,7 +288,7 @@ $uses = @{
   heavy  = 'hard problems, big refactors and agent work (slowest, smartest)'
 }
 $first = $null
-foreach ($p in $chosen) {
+foreach ($p in $plan) {
   if ($failed -contains $p.Tag) { continue }
   $use = $uses[$p.Tier]
   if (Test-Installed $p.Tag) { $use += ' [already had it]' }
@@ -294,10 +302,6 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { Say 'Claude Code is inst
 Say 'Use with Claude Code: ollama launch claude   (then pick a model)'
 Say 'Remove a model:       ollama rm <model>'
 if ($missing.Count) { Warn "Skipped because the tag wasn't found: $($missing -join ', ')" }
-if ($failed.Count) {
-  # A pull fails with "requires a newer version of Ollama" when a model needs a newer release than this one.
-  try { $latest = [version]((Invoke-RestMethod -UseBasicParsing -TimeoutSec 10 -Uri 'https://api.github.com/repos/ollama/ollama/releases/latest').tag_name.TrimStart('v')) } catch { $latest = $null }
-  if ($latest -and $ver -and $ver -lt $latest) { Warn "Your Ollama ($ver) is older than the latest ($latest), and new models often need it. Update with: winget upgrade Ollama.Ollama" }
-}
+if ($failed.Count -and $latest -and $ver -and $ver -lt $latest) { Warn "Your Ollama ($ver) is older than the latest ($latest), and new models often need it. Re-run this script and accept the Ollama update." }
 if ($failed.Count) { Warn "These downloads failed: $($failed -join ', '). Re-run this script to retry."; exit 1 }
 exit 0
