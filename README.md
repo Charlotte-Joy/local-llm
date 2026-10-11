@@ -1,66 +1,60 @@
 # local-llm
 
-Run AI models on your own computer. local-llm detects your hardware, installs or updates
-[Ollama](https://ollama.com), downloads three models sized for your machine and picked for what
-you'll use them for, and gives you one command to start them:
+Run AI models on your own computer, picked and sized for your machine. Works on macOS, Linux and
+Windows.
 
-| Use | Picked for |
-|---|---|
-| **coding** | Writing and fixing code, and coding agents. Also installs or updates [Claude Code](https://code.claude.com). |
-| **writing** | Creative writing, editing and general chat |
-| **vision** | Understanding images, screenshots and documents |
+## How to use it
 
-Each use gets three tiers: **light** (fastest), **medium** (balanced) and **heavy** (the strongest
-model that fits comfortably). Works on macOS, Linux and Windows.
+### Mac or Linux (in Terminal)
 
-## Quick start
-
-### macOS and Linux
-
-1. Open a terminal (on a Mac: the **Terminal** app).
-2. Go into this folder, for example:
+1. Download local-llm:
    ```sh
-   cd ~/Downloads/local-llm
+   git clone https://github.com/Charlotte-Joy/local-llm.git ~/local-llm
    ```
-3. Run the installer:
+2. Install Ollama and your models. Answer the questions; pressing Enter accepts the suggestion.
    ```sh
-   bash install.sh
+   bash ~/local-llm/install.sh
    ```
-4. Answer the questions. Pressing Enter accepts the suggested answer.
+3. Start a model. Go to the folder you want to work in, then run:
+   ```sh
+   bash ~/local-llm/launch.sh
+   ```
+   Pick **light**, **medium** or **heavy** with the arrow keys and press Enter.
 
-### Windows
+### Windows (in PowerShell)
 
-1. Open **PowerShell** (search for it in the Start menu).
-2. Go into this folder, for example:
+1. Download local-llm:
    ```powershell
-   cd $HOME\Downloads\local-llm
+   git clone https://github.com/Charlotte-Joy/local-llm.git $HOME\local-llm
    ```
-3. Run the installer:
+2. Install Ollama and your models. Answer the questions; pressing Enter accepts the suggestion.
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   powershell -ExecutionPolicy Bypass -File $HOME\local-llm\install.ps1
    ```
-4. Answer the questions. Pressing Enter accepts the suggested answer.
+3. Start a model. Go to the folder you want to work in, then run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File $HOME\local-llm\launch.ps1
+   ```
+   Pick **light**, **medium** or **heavy** with the arrow keys and press Enter.
 
-The installer asks what you'll mainly use the models for, shows what it will download and how big
-it is, then asks before downloading. At the end it prints the names of the models it installed.
-To see the plan without changing anything, add `--dry-run` to the end of the command in step 3.
+No `git`? On the GitHub page, choose **Code > Download ZIP**, unzip it, rename the folder to
+`local-llm` and move it into your home folder.
 
-## Using the models
+## What you get
 
-Open a terminal in the folder you want to work in and run the launcher from this folder:
+The installer asks what you'll mainly use the models for:
 
-| System | Type |
-|---|---|
-| macOS or Linux | `bash ~/Downloads/local-llm/launch.sh` |
-| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -File $HOME\Downloads\local-llm\launch.ps1` |
+| Use | Picked for | Step 3 opens |
+|---|---|---|
+| **coding** | Writing and fixing code. Also installs or updates [Claude Code](https://code.claude.com). | Claude Code, working on the folder you're in |
+| **writing** | Creative writing, editing and general chat | A chat in the terminal |
+| **vision** | Understanding images, screenshots and documents | A chat in the terminal |
 
-Use the arrow keys to pick **light**, **medium** or **heavy**, then press Enter. Coding models start
-in Claude Code, working on the folder you're in; writing and vision models start a chat. Add
-`--chat` or `--claude` to the command to choose for yourself.
-
+Each use gets three models: **light** (fastest), **medium** (balanced) and **heavy** (the strongest
+that fits comfortably). Add `--chat` or `--claude` to the step 3 command to choose how it opens.
 You can also start Claude Code directly with `ollama launch claude` and pick a model from its list.
 
-### Using a model directly in the terminal
+## Using a model directly in the terminal
 
 If you'd rather talk to a model without Claude Code, these commands work the same on every system.
 Replace `<model>` with a name the installer printed, such as `qwen3.5:4b`.
@@ -80,8 +74,8 @@ Other apps that support Ollama can use these models too; Ollama runs at `http://
 
 ## Options
 
-Add options to the end of the run command, for example `bash install.sh --use writing` or
-`powershell -ExecutionPolicy Bypass -File .\install.ps1 --use writing`. They're the same on every system.
+Add options to the end of the step 2 command, for example `bash ~/local-llm/install.sh --use writing`.
+They're the same on every system.
 
 | Option | What it does |
 |---|---|
