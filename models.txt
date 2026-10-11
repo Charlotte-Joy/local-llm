@@ -1,16 +1,44 @@
-# Coding-model tiers for install.sh / install.ps1 (current as of October 2026).
+# Model tiers for install.sh / install.ps1 (chosen October 2026 from independent benchmarks).
 #
+# One section per use: "[name] description". The installer asks which use matters most (or takes --use).
 # Each row: min_budget_GB  light  medium  heavy
 # The installer uses the highest row whose min_budget is <= the machine's memory budget.
+# Every model is under ~80% of its row's budget, leaving room for the context window.
 #
 # A cell may list fallbacks separated by "|": the first tag that exists on ollama.com is used.
-# On Apple Silicon, a plain tag like qwen3.8:27b is automatically swapped for its MLX build
-# (qwen3.8:27b-mlx) when one is published. Tags with an explicit variant (like -q8_0) are left alone.
+# "-" means no model for that tier.
+# On Apple Silicon, a plain tag like qwen3.8:27b is swapped for its MLX build (qwen3.8:27b-mlx)
+# when one is published and is about the same size. Tags with an explicit variant (like -q8_0) are left alone.
 #
+# Evidence (fetched 2026-10-11):
+#   coding  - Artificial Analysis (Terminal-Bench 2.1, tau2-bench tool calling), Vals.ai SWE-bench and
+#             LiveCodeBench, LiveBench, swebench.com. Devstral, gpt-oss and qwen3-coder were dropped for
+#             weak independent agentic / tool-calling results.
+#   writing - EQ-Bench Creative Writing v3 and Longform, LMArena creative writing.
+#   vision  - Artificial Analysis MMMU-Pro, LMArena vision, Vals.ai MMMU.
+# Image generation is left out: Ollama removed it in 0.32.6 (Aug 2026) and it isn't back as of 0.40.2.
+
+[coding] Writing and fixing code, and coding agents like Claude Code
 # min  light                medium               heavy
-0      qwen2.5-coder:1.5b   qwen2.5-coder:3b     qwen2.5-coder:7b
-6      qwen2.5-coder:3b     qwen2.5-coder:7b     gemma4:12b
-10     qwen2.5-coder:7b     qwen2.5-coder:14b    gpt-oss:20b
-16     qwen2.5-coder:7b     gpt-oss:20b          qwen3.8:27b
-28     gpt-oss:20b          qwen3-coder:30b      qwen3.8:27b
-44     qwen3-coder:30b      qwen3.8:27b          qwen3.8:27b-q8_0|qwen3.8:27b
+0      qwen2.5-coder:1.5b   qwen3.5:2b           qwen3.5:4b
+6      qwen2.5-coder:3b     qwen3.5:2b           qwen3.5:4b
+10     qwen3.5:2b           qwen3.5:4b           qwen3.5:9b
+24     qwen3.5:4b           qwen3.5:9b           qwen3.8:27b
+28     qwen3.5:9b           gemma4:26b           qwen3.8:27b
+44     qwen3.6:35b          qwen3.8:27b          qwen3.8:27b-q8_0|qwen3.8:27b
+
+[writing] Creative writing, editing and general chat
+# min  light                medium               heavy
+0      gemma3:1b            gemma3:4b            -
+11     gemma3:1b            gemma3:4b            gemma4:12b
+24     gemma4:12b           gemma4:26b           qwen3.8:27b
+28     gemma4:26b           gemma4:31b           qwen3.8:27b
+44     gemma4:26b           gemma4:31b           qwen3.8:27b-q8_0|qwen3.8:27b
+
+[vision] Understanding images, screenshots and documents
+# min  light                medium               heavy
+0      qwen3.5:0.8b         qwen3.5:2b           qwen3.5:4b
+10     qwen3.5:2b           qwen3.5:4b           qwen3.5:9b
+16     qwen3.5:4b           qwen3.5:9b           gemma4:12b
+24     qwen3.5:9b           gemma4:26b           qwen3.8:27b
+44     qwen3.6:35b          gemma4:31b           qwen3.8:27b-q8_0|qwen3.8:27b

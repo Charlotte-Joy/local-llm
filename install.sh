@@ -148,22 +148,21 @@ manifest_size() { # tag -> prints total download bytes. Returns 0 found, 1 not f
   printf '%s' "$out" | grep -oE '"size": *[0-9]+' | awk -F: '{ s += $2 } END { print s + 0 }'
 }
 resolve() { # "a|b" -> sets TAG, SIZE, NOTE (TAG empty if nothing exists)
-  local first="${1%%|*}" alt c cands rc
+  local first="${1%%|*}" alt rc mlx_size
   TAG=""; SIZE=0; NOTE=""
   for alt in $(printf '%s' "$1" | tr '|' ' '); do
-    cands="$alt"
-    # On Apple Silicon prefer the MLX build of plain tags (qwen3.8:27b -> qwen3.8:27b-mlx).
-    [ "$APPLE" = 1 ] && [[ "$alt" == *:* && "${alt#*:}" != *-* ]] && cands="$alt-mlx $alt"
-    for c in $cands; do
-      SIZE=$(manifest_size "$c"); rc=$?
-      if [ $rc = 2 ]; then TAG=$first; SIZE=0; NOTE="couldn't reach ollama.com to check this tag; will try anyway"; return; fi
-      if [ $rc = 0 ]; then
-        TAG=$c
-        [ "$alt" != "$first" ] && NOTE="$first is not published, falling back to $alt"
-        [ "$c" != "$alt" ] && NOTE="${NOTE:+$NOTE; }MLX build, faster on Apple Silicon"
-        return
-      fi
-    done
+    SIZE=$(manifest_size "$alt"); rc=$?
+    if [ $rc = 2 ]; then TAG=$first; SIZE=0; NOTE="couldn't reach ollama.com to check this tag; will try anyway"; return; fi
+    [ $rc = 1 ] && continue
+    TAG=$alt
+    [ "$alt" != "$first" ] && NOTE="$first is not published, falling back to $alt"
+    # On Apple Silicon prefer the MLX build of plain tags (qwen3.8:27b -> qwen3.8:27b-mlx), but only when it is
+    # at most 10% bigger: some MLX builds are far larger (qwen3.5:9b is 6.6 GB, its MLX build 8.9 GB) and wouldn't fit.
+    if [ "$APPLE" = 1 ] && [[ "$alt" == *:* && "${alt#*:}" != *-* ]] &&
+       mlx_size=$(manifest_size "$alt-mlx") && [ "$mlx_size" -le $(( SIZE * 11 / 10 )) ]; then
+      TAG="$alt-mlx"; SIZE=$mlx_size; NOTE="${NOTE:+$NOTE; }MLX build, faster on Apple Silicon"
+    fi
+    return
   done
   NOTE="'${1//|/ or }' was not found on ollama.com (renamed? edit models.txt)"
 }
