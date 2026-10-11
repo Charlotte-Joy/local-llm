@@ -46,23 +46,33 @@ To see the plan without changing anything, add `--dry-run` to the end of the com
 
 ## Using the models
 
-These commands are the same on every system: type them in Terminal on macOS or Linux, or in
-PowerShell on Windows. Replace `<model>` with a name the installer printed, such as `qwen3.5:4b`.
+Open a terminal in the folder you want to work in (Terminal on macOS or Linux, PowerShell on
+Windows) and run:
+
+```
+ollama launch claude
+```
+
+Pick one of your new models from the list, and Claude Code starts using it, running entirely on
+your computer.
+
+### Using a model directly in the terminal
+
+If you'd rather talk to a model without Claude Code, these commands work the same on every system.
+Replace `<model>` with a name the installer printed, such as `qwen3.5:4b`.
 
 | To do this | Type |
 |---|---|
-| See which models you have | `ollama list` |
 | Chat with a model (type `/bye` to stop) | `ollama run <model>` |
 | Ask about a picture (vision models) | `ollama run <model> "What's in this picture? <full path to the image>"` |
-| Code with Claude Code using a local model | `ollama launch claude`, then pick a model |
+| See which models you have | `ollama list` |
 | Remove a model you don't want | `ollama rm <model>` |
 
-- For Claude Code, run `ollama launch claude` from inside the project folder you want to work on.
-  It works best with the coding models.
-- For pictures, put the image's full file path in the message, such as `/Users/you/Pictures/photo.png`
-  on a Mac or `C:\Users\you\Pictures\photo.png` on Windows. Dragging the file into the terminal
-  window types its path for you.
-- Other apps that support Ollama can use these models too; Ollama runs at `http://localhost:11434`.
+For pictures, use the image's full file path, such as `/Users/you/Pictures/photo.png` on a Mac or
+`C:\Users\you\Pictures\photo.png` on Windows. Dragging the file into the terminal window types
+its path for you.
+
+Other apps that support Ollama can use these models too; Ollama runs at `http://localhost:11434`.
 
 ## Options
 
