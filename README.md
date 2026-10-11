@@ -1,7 +1,8 @@
-# Local model installer (Ollama)
+# local-llm
 
-Detects your hardware, installs or updates [Ollama](https://ollama.com), and downloads three local
-models sized for your machine and picked for what you'll use them for:
+Run AI models on your own computer. local-llm detects your hardware, installs or updates
+[Ollama](https://ollama.com), downloads three models sized for your machine and picked for what
+you'll use them for, and gives you one command to start them:
 
 | Use | Picked for |
 |---|---|
@@ -19,7 +20,7 @@ model that fits comfortably). Works on macOS, Linux and Windows.
 1. Open a terminal (on a Mac: the **Terminal** app).
 2. Go into this folder, for example:
    ```sh
-   cd ~/Downloads/ollama-coder-installer
+   cd ~/Downloads/local-llm
    ```
 3. Run the installer:
    ```sh
@@ -32,7 +33,7 @@ model that fits comfortably). Works on macOS, Linux and Windows.
 1. Open **PowerShell** (search for it in the Start menu).
 2. Go into this folder, for example:
    ```powershell
-   cd $HOME\Downloads\ollama-coder-installer
+   cd $HOME\Downloads\local-llm
    ```
 3. Run the installer:
    ```powershell
@@ -46,15 +47,18 @@ To see the plan without changing anything, add `--dry-run` to the end of the com
 
 ## Using the models
 
-Open a terminal in the folder you want to work in (Terminal on macOS or Linux, PowerShell on
-Windows) and run:
+Open a terminal in the folder you want to work in and run the launcher from this folder:
 
-```
-ollama launch claude
-```
+| System | Type |
+|---|---|
+| macOS or Linux | `bash ~/Downloads/local-llm/launch.sh` |
+| Windows (PowerShell) | `powershell -ExecutionPolicy Bypass -File $HOME\Downloads\local-llm\launch.ps1` |
 
-Pick one of your new models from the list, and Claude Code starts with that model running on your
-computer.
+Use the arrow keys to pick **light**, **medium** or **heavy**, then press Enter. Coding models start
+in Claude Code, working on the folder you're in; writing and vision models start a chat. Add
+`--chat` or `--claude` to the command to choose for yourself.
+
+You can also start Claude Code directly with `ollama launch claude` and pick a model from its list.
 
 ### Using a model directly in the terminal
 

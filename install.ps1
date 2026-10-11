@@ -5,6 +5,7 @@ $ModelsFile = Join-Path $PSScriptRoot 'models.txt'
 $MinOllama  = [version]'0.14.0'
 $Registry   = 'https://registry.ollama.ai/v2'
 $Server     = 'http://localhost:11434'
+$ProgressPreference = 'SilentlyContinue'   # web-request progress bars clutter the output and slow PowerShell 5.1 downloads
 # PowerShell 5.1 defaults to TLS 1.0, which ollama.com refuses.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
@@ -189,7 +190,6 @@ function Install-Ollama($verb) { # Install | Update
   } else {
     if (-not (Ask "$verb Ollama$target with the official installer from ollama.com?" 'Y')) { return $false }
     $setup = Join-Path $env:TEMP 'OllamaSetup.exe'
-    $ProgressPreference = 'SilentlyContinue'   # PowerShell 5.1's progress bar slows big downloads to a crawl
     Say 'Downloading the Ollama installer...'
     try { Invoke-WebRequest -UseBasicParsing -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $setup }
     catch { Warn "Download failed: $($_.Exception.Message)"; return $false }
@@ -347,6 +347,15 @@ if (-not $NoContext) {
 # ---------------------------------------------------------------------------
 # Step 6: what's installed and how to use it
 # ---------------------------------------------------------------------------
+function Save-Installed($use, $tier, $tag) { # remember the model for this use and tier, so launch.ps1 can list it
+  $dir = Join-Path $HOME '.local-llm'; $file = Join-Path $dir 'installed.txt'
+  try {
+    [void](New-Item -ItemType Directory -Force -Path $dir)
+    $keep = @()
+    if (Test-Path $file) { $keep = @(Get-Content $file | Where-Object { $f = $_ -split '\s+'; -not ($f[0] -eq $use -and $f[1] -eq $tier) }) }
+    Set-Content -Path $file -Value ($keep + "$use $tier $tag")
+  } catch { Warn "Couldn't save the model list for launch.ps1: $($_.Exception.Message)" }
+}
 Step 'All done'
 $tierUses = @{ light = 'fastest, for quick tasks'; medium = 'balanced, for everyday use'; heavy = 'best quality, slowest' }
 if ($Use -eq 'coding') {
@@ -359,15 +368,17 @@ if ($Use -eq 'coding') {
 $first = $null
 foreach ($p in $plan) {
   if ($failed -contains $p.Tag) { continue }
-  $use = $tierUses[$p.Tier]
-  if (Test-Installed $p.Tag) { $use += ' [already had it]' }
-  Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $use)
+  # Not $use: PowerShell names ignore case, so it would overwrite $Use (the chosen purpose).
+  $tierText = $tierUses[$p.Tier]
+  if (Test-Installed $p.Tag) { $tierText += ' [already had it]' }
+  Save-Installed $Use $p.Tier $p.Tag
+  Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $tierText)
   if (-not $first) { $first = $p.Tag }
 }
 if (-not $first) { Say '  No models were installed this time.' }
 Say ''
-if ($first) { Say "Try a model:          ollama run $first" }
-if ($Use -eq 'coding') { Say 'Use with Claude Code: ollama launch claude   (then pick a model)' }
+if ($first) { Say "Start a model:        powershell -ExecutionPolicy Bypass -File $(Join-Path $PSScriptRoot 'launch.ps1')"; Say '                      (arrow keys to pick light, medium or heavy)' }
+if ($Use -eq 'coding') { Say 'Or start Claude Code: ollama launch claude' }
 if ($claude -and -not (Get-Command claude -ErrorAction SilentlyContinue)) { Say "                      (open a new PowerShell window first so 'claude' is on your PATH)" }
 Say 'Remove a model:       ollama rm <model>'
 if ($missing.Count) { Warn "Skipped because the tag wasn't found: $($missing -join ', ')" }

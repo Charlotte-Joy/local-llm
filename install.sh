@@ -383,6 +383,12 @@ fi
 # ---------------------------------------------------------------------------
 # Step 6: what's installed and how to use it
 # ---------------------------------------------------------------------------
+record_installed() { # remember the model for this use and tier, so launch.sh can list it
+  local file="$HOME/.local-llm/installed.txt" tmp
+  mkdir -p "$HOME/.local-llm" && tmp=$(mktemp) || return 0
+  [ -r "$file" ] && awk -v u="$1" -v t="$2" '!($1 == u && $2 == t)' "$file" >"$tmp"
+  printf '%s %s %s\n' "$1" "$2" "$3" >>"$tmp" && mv "$tmp" "$file"
+}
 step "All done"
 FIRST=""
 for i in "${!P_TAG[@]}"; do
@@ -397,13 +403,14 @@ for i in "${!P_TAG[@]}"; do
     *heavy)  use="best quality, slowest" ;;
   esac
   is_installed "$t" && use="$use [already had it]"
+  record_installed "$USE" "${P_TIER[$i]}" "$t"
   printf '  %s%-7s%s %-28s %s\n' "$B" "${P_TIER[$i]}" "$N" "$t" "$use"
   [ -z "$FIRST" ] && FIRST=$t
 done
 [ -z "$FIRST" ] && say "  No models were installed this time."
 say ""
-[ -n "$FIRST" ] && say "Try a model:          ollama run $FIRST"
-[ "$USE" = coding ] && say "Use with Claude Code: ollama launch claude   (then pick a model)"
+[ -n "$FIRST" ] && say "Start a model:        bash $HERE/launch.sh   (arrow keys to pick light, medium or heavy)"
+[ "$USE" = coding ] && say "Or start Claude Code: ollama launch claude"
 [ -n "$CLAUDE" ] && ! command -v claude >/dev/null 2>&1 && say "                      (open a new terminal first so 'claude' is on your PATH)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"
