@@ -10,30 +10,66 @@ models sized for your machine and picked for what you'll use them for:
 | **vision** | Understanding images, screenshots and documents |
 
 Each use gets three tiers: **light** (fastest), **medium** (balanced) and **heavy** (the strongest
-model that fits comfortably). The script asks which use matters most, or you can pass `--use`.
+model that fits comfortably). Works on macOS, Linux and Windows.
 
-Works on macOS, Linux and Windows. The model list lives in `models.txt`, so you can update it without
-touching the scripts.
+## Quick start
 
-## Run it
+### macOS and Linux
 
-macOS / Linux:
+1. Open a terminal (on a Mac: the **Terminal** app).
+2. Go into this folder, for example:
+   ```sh
+   cd ~/Downloads/ollama-coder-installer
+   ```
+3. Run the installer:
+   ```sh
+   bash install.sh
+   ```
+4. Answer the questions. Pressing Enter accepts the suggested answer.
 
-```bash
-./install.sh
-```
+### Windows
 
-Windows (PowerShell 5.1 or newer):
+1. Open **PowerShell** (search for it in the Start menu).
+2. Go into this folder, for example:
+   ```powershell
+   cd $HOME\Downloads\ollama-coder-installer
+   ```
+3. Run the installer:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   ```
+4. Answer the questions. Pressing Enter accepts the suggested answer.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+The installer asks what you'll mainly use the models for, shows what it will download and how big
+it is, then asks before downloading. At the end it prints the names of the models it installed.
+To see the plan without changing anything, add `--dry-run` to the end of the command in step 3.
 
-Keep `models.txt` in the same folder as the script. Start with `--dry-run` to see what it would do.
+## Using the models
 
-## Flags
+These commands are the same on every system: type them in Terminal on macOS or Linux, or in
+PowerShell on Windows. Replace `<model>` with a name the installer printed, such as `qwen3.5:4b`.
 
-| Flag | What it does |
+| To do this | Type |
+|---|---|
+| See which models you have | `ollama list` |
+| Chat with a model (type `/bye` to stop) | `ollama run <model>` |
+| Ask about a picture (vision models) | `ollama run <model> "What's in this picture? <full path to the image>"` |
+| Code with Claude Code using a local model | `ollama launch claude`, then pick a model |
+| Remove a model you don't want | `ollama rm <model>` |
+
+- For Claude Code, run `ollama launch claude` from inside the project folder you want to work on.
+  It works best with the coding models.
+- For pictures, put the image's full file path in the message, such as `/Users/you/Pictures/photo.png`
+  on a Mac or `C:\Users\you\Pictures\photo.png` on Windows. Dragging the file into the terminal
+  window types its path for you.
+- Other apps that support Ollama can use these models too; Ollama runs at `http://localhost:11434`.
+
+## Options
+
+Add options to the end of the run command, for example `bash install.sh --use writing` or
+`powershell -ExecutionPolicy Bypass -File .\install.ps1 --use writing`. They're the same on every system.
+
+| Option | What it does |
 |---|---|
 | `--use coding\|writing\|vision` | What the models are for; skips the question (default: ask, Enter picks coding) |
 | `--tier <tiers>` | Which models to install: `light`, `medium`, `heavy` or `all` (default: `all`). Combine with commas, e.g. `--tier light,medium`. `low`, `mid` and `high` also work. |
@@ -60,9 +96,8 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
    the MLX build of a model (for example `qwen3.8:27b-mlx`) when one is published and is at most 10%
    bigger, because MLX is Apple's machine-learning framework and runs faster on Mac. Some MLX builds
    are much bigger than the regular build and would no longer fit, so those are skipped.
-4. **Installs Ollama, or updates it to the latest release** (checked on GitHub), asking first. Press
-   Enter to accept. New models often need a recent Ollama, and version 0.14.0 or newer is required
-   for Claude Code.
+4. **Installs Ollama, or updates it to the latest release** (checked on GitHub), asking first. New
+   models often need a recent Ollama, and version 0.14.0 or newer is required for Claude Code.
    - macOS: Homebrew if Ollama came from Homebrew (or if it's missing and Homebrew is installed).
      Otherwise it downloads the official app from ollama.com, checks Apple's signature, quits the
      running app, swaps the new one into `/Applications` and reopens it. The old app is kept in a
@@ -70,28 +105,29 @@ Keep `models.txt` in the same folder as the script. Start with `--dry-run` to se
    - Linux: the official install script, which uses sudo.
    - Windows: winget, or the signed official installer if winget is missing.
 
-   Then it starts the Ollama server if it isn't running.
-   **Then Claude Code** (coding only), which `ollama launch claude` starts. If it's missing, the script offers to
-   install it with the official installer (`curl -fsSL https://claude.ai/install.sh | bash`, or
-   `install.ps1` on Windows). If it's installed, the script asks before updating it with
-   `claude update` (or `brew upgrade` / `winget upgrade` if it came from Homebrew or WinGet).
-5. **Downloads all three models by default** (or only the tiers named with `--tier`), after one
+   Then it starts the Ollama server if it isn't running, and restarts it if an update left the old
+   version running.
+5. **Installs or updates Claude Code** (coding only), which `ollama launch claude` starts. If it's
+   missing, the script offers the official installer. If it's installed, the script asks before
+   updating it with `claude update` (or `brew upgrade` / `winget upgrade` if it came from Homebrew
+   or WinGet).
+6. **Downloads all three models by default** (or only the tiers named with `--tier`), after one
    confirmation. It skips models you already have and stops if free disk space is less than the
    downloads plus 10 GB. If one download fails, it continues with the others and lists the
    failures at the end. It never deletes models.
-6. **Raises the context window** (`OLLAMA_CONTEXT_LENGTH`) from Ollama's default of 4096 tokens to
+7. **Raises the context window** (`OLLAMA_CONTEXT_LENGTH`) from Ollama's default of 4096 tokens to
    32768, or 65536 when the budget is 28 GB or more, asking first:
    - macOS: `launchctl setenv`, plus an optional line in `~/.zshrc`. Restart the Ollama app afterwards.
    - Linux: a systemd drop-in at `/etc/systemd/system/ollama.service.d/context.conf`, then a restart.
    - Windows: `setx`. Quit Ollama from the system tray and start it again.
 
-Running the script again is safe: anything already done is skipped.
+Running the installer again is safe: anything already done is skipped.
 
 ## Editing models.txt
 
-The file has one section per use. A section starts with `[name] description`; the description is
-what the menu shows. Each row holds the minimum budget in GB, followed by the light, medium and
-heavy tags. `#` starts a comment.
+Keep `models.txt` in the same folder as the scripts. It has one section per use. A section starts
+with `[name] description`; the description is what the menu shows. Each row holds the minimum
+budget in GB, followed by the light, medium and heavy tags. `#` starts a comment.
 
 ```
 [writing] Creative writing, editing and general chat
@@ -112,20 +148,3 @@ The current picks come from independent benchmarks (Artificial Analysis, Vals.ai
 swebench.com, EQ-Bench and LMArena), fetched in October 2026; the top of `models.txt` lists which
 were used for each section. Image generation isn't included because Ollama removed it in 0.32.6
 and hasn't brought it back yet.
-
-## Using the models
-
-```bash
-ollama run qwen3.5:4b
-```
-
-```bash
-ollama launch claude
-```
-
-```bash
-ollama rm <model>
-```
-
-The first command chats with a model in the terminal. The second starts Claude Code backed by a
-local model (it asks you to pick one); it's most useful with the coding models. The third removes a model you no longer want.
