@@ -53,8 +53,8 @@ Windows) and run:
 ollama launch claude
 ```
 
-Pick one of your new models from the list, and Claude Code starts using it, running entirely on
-your computer.
+Pick one of your new models from the list, and Claude Code starts with that model running on your
+computer.
 
 ### Using a model directly in the terminal
 
