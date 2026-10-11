@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs or updates Ollama and Claude Code, then three local coding models sized for this machine.
-# macOS + Linux. Usage: ./install.sh [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
+# Installs or updates Ollama (and Claude Code for coding), then three local models sized for this machine.
+# macOS + Linux. Usage: ./install.sh [--use coding|writing|...] [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,10 +27,11 @@ human() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
 gib()   { awk -v b="$1" 'BEGIN { printf "%d", b / 1073741824 + 0.5 }'; }   # bytes -> whole GB
 ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$2" ]; }  # $1 >= $2
 
-TIER=all; BUDGET_OVERRIDE=""; DRY=0; YES=0; NO_CTX=0; NO_CLAUDE=0
+TIER=all; USE=""; BUDGET_OVERRIDE=""; DRY=0; YES=0; NO_CTX=0; NO_CLAUDE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tier) TIER="${2:-}"; shift ;;
+    --use) USE=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z'); shift ;;
     --budget) BUDGET_OVERRIDE="${2:-}"; shift ;;
     --dry-run) DRY=1 ;;
     --yes|-y) YES=1 ;;
@@ -100,8 +101,32 @@ fi
 # Step 2: pick the tier row from models.txt and check each tag exists
 # ---------------------------------------------------------------------------
 step "Choosing models"
-FITS=$(sed 's/#.*//' "$MODELS_FILE" | awk 'NF >= 4 { print $1, $2, $3, $4 }' | sort -n | awk -v b="$BUDGET" '$1 <= b')
-[ -n "$FITS" ] || die "No row in models.txt fits a ${BUDGET}GB budget."
+# models.txt has one "[use] description" section per use; rows before any section count as coding.
+list_uses() { sed 's/#.*//' "$MODELS_FILE" | sed -n 's/^[[:space:]]*\[\([a-z0-9_-]*\)\][[:space:]]*\(.*\)$/\1|\2/p'; }
+section_rows() {
+  sed 's/#.*//' "$MODELS_FILE" | awk -v want="$1" '
+    /^[[:space:]]*\[/ { cur = $0; sub(/^[[:space:]]*\[/, "", cur); sub(/\].*/, "", cur); next }
+    NF >= 4 && (cur == want || (cur == "" && want == "coding")) { print $1, $2, $3, $4 }'
+}
+USES=$(list_uses); [ -n "$USES" ] || USES="coding|Writing and fixing code"
+USE_NAMES=$(printf '%s\n' "$USES" | cut -d'|' -f1)
+if [ -z "$USE" ]; then
+  USE=$(printf '%s\n' "$USE_NAMES" | head -1)
+  if [ "$YES" = 0 ] && [ "$(printf '%s\n' "$USES" | wc -l)" -gt 1 ]; then
+    say "What will you mainly use these models for? The best models differ a lot by task."
+    printf '%s\n' "$USES" | awk -F'|' '{ printf "  %d) %-9s %s\n", NR, $1, $2 }'
+    while :; do
+      printf 'Choose a number [1]: '; read -r answer </dev/tty || answer=""
+      [ -z "$answer" ] && break
+      if [[ "$answer" =~ ^[0-9]+$ ]]; then PICK=$(printf '%s\n' "$USE_NAMES" | sed -n "${answer}p"); else PICK=""; fi
+      [ -n "$PICK" ] && { USE=$PICK; break; }
+      warn "Please type one of the numbers above."
+    done
+  fi
+fi
+printf '%s\n' "$USE_NAMES" | grep -qxF "$USE" || die "Unknown --use '$USE'. Choose from: $(printf '%s ' $USE_NAMES)"
+FITS=$(section_rows "$USE" | sort -n | awk -v b="$BUDGET" '$1 <= b')
+[ -n "$FITS" ] || die "No row in the [$USE] section of models.txt fits a ${BUDGET}GB budget."
 ROW=$(printf '%s\n' "$FITS" | tail -1)
 if [ "$HAS_GPU" = 0 ] && [ -z "$BUDGET_OVERRIDE" ] && [ "${ROW%% *}" -ge 16 ] && [ "$(printf '%s\n' "$FITS" | wc -l)" -gt 1 ]; then
   LOWER=$(printf '%s\n' "$FITS" | tail -2 | head -1)
@@ -109,7 +134,7 @@ if [ "$HAS_GPU" = 0 ] && [ -z "$BUDGET_OVERRIDE" ] && [ "${ROW%% *}" -ge 16 ] &&
   ROW=$LOWER
 fi
 set -- $ROW
-say "Using the ${1}GB+ row of models.txt"
+say "Using the ${1}GB+ row of the [$USE] models (choose another use with --use)"
 TIERS=(light medium heavy); SPECS=("$2" "$3" "$4")
 
 manifest_size() { # tag -> prints total download bytes. Returns 0 found, 1 not found, 2 couldn't check
@@ -120,7 +145,7 @@ manifest_size() { # tag -> prints total download bytes. Returns 0 found, 1 not f
         "$REGISTRY/$name/manifests/$tag" 2>/dev/null) || return 2
   code="${out##*$'\n'}"
   case "$code" in 200) ;; 404) return 1 ;; *) return 2 ;; esac
-  printf '%s' "$out" | grep -o '"size":[0-9]*' | awk -F: '{ s += $2 } END { print s + 0 }'
+  printf '%s' "$out" | grep -oE '"size": *[0-9]+' | awk -F: '{ s += $2 } END { print s + 0 }'
 }
 resolve() { # "a|b" -> sets TAG, SIZE, NOTE (TAG empty if nothing exists)
   local first="${1%%|*}" alt c cands rc
@@ -145,6 +170,7 @@ resolve() { # "a|b" -> sets TAG, SIZE, NOTE (TAG empty if nothing exists)
 P_TIER=(); P_TAG=(); P_SIZE=(); P_NOTE=(); MISSING=""
 for i in 0 1 2; do
   [[ " $WANT " == *" ${TIERS[$i]} "* ]] || continue
+  [ "${SPECS[$i]}" = "-" ] && continue   # "-" in models.txt means no model for this tier
   resolve "${SPECS[$i]}"
   if [ -z "$TAG" ]; then warn "${TIERS[$i]}: $NOTE"; MISSING="$MISSING ${TIERS[$i]}"; continue; fi
   P_TIER+=("${TIERS[$i]}"); P_TAG+=("$TAG"); P_SIZE+=("$SIZE"); P_NOTE+=("$NOTE")
@@ -259,7 +285,7 @@ is_installed() { printf '%s\n' "$INSTALLED" | grep -qxF "$1" || printf '%s\n' "$
 # Step 3b: install or update Claude Code, which `ollama launch claude` starts
 # ---------------------------------------------------------------------------
 CLAUDE=""
-if [ "$NO_CLAUDE" = 0 ]; then
+if [ "$NO_CLAUDE" = 0 ] && [ "$USE" = coding ]; then
   step "Checking Claude Code"
   CLAUDE=$(command -v claude 2>/dev/null || true)
   # The official installer puts claude in ~/.local/bin, which may not be on PATH until a new terminal opens.
@@ -363,10 +389,13 @@ FIRST=""
 for i in "${!P_TAG[@]}"; do
   t=${P_TAG[$i]}
   [[ " $FAILED " == *" $t "* ]] && continue
-  case ${P_TIER[$i]} in
-    light)  use="quick questions, explanations and autocomplete (fastest)" ;;
-    medium) use="everyday coding: writing functions, fixing bugs, reviews" ;;
-    heavy)  use="hard problems, big refactors and agent work (slowest, smartest)" ;;
+  case "$USE ${P_TIER[$i]}" in
+    "coding light")  use="quick questions, explanations and autocomplete (fastest)" ;;
+    "coding medium") use="everyday coding: writing functions, fixing bugs, reviews" ;;
+    "coding heavy")  use="hard problems, big refactors and agent work (slowest, smartest)" ;;
+    *light)  use="fastest, for quick tasks" ;;
+    *medium) use="balanced, for everyday use" ;;
+    *heavy)  use="best quality, slowest" ;;
   esac
   is_installed "$t" && use="$use [already had it]"
   printf '  %s%-7s%s %-28s %s\n' "$B" "${P_TIER[$i]}" "$N" "$t" "$use"
@@ -375,7 +404,7 @@ done
 [ -z "$FIRST" ] && say "  No models were installed this time."
 say ""
 [ -n "$FIRST" ] && say "Try a model:          ollama run $FIRST"
-say "Use with Claude Code: ollama launch claude   (then pick a model)"
+[ "$USE" = coding ] && say "Use with Claude Code: ollama launch claude   (then pick a model)"
 [ -n "$CLAUDE" ] && ! command -v claude >/dev/null 2>&1 && say "                      (open a new terminal first so 'claude' is on your PATH)"
 say "Remove a model:       ollama rm <model>"
 [ -n "$MISSING" ] && warn "Skipped because the tag wasn't found:$MISSING"

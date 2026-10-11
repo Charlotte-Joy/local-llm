@@ -1,5 +1,5 @@
-# Installs or updates Ollama and Claude Code, then three local coding models sized for this machine.
-# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
+# Installs or updates Ollama (and Claude Code for coding), then three local models sized for this machine.
+# Windows, PowerShell 5.1+. Usage: .\install.ps1 [--use coding|writing|...] [--tier light,medium,heavy|all] [--budget GB] [--dry-run] [--yes] [--no-context] [--no-claude]
 
 $ModelsFile = Join-Path $PSScriptRoot 'models.txt'
 $MinOllama  = [version]'0.14.0'
@@ -20,11 +20,12 @@ function Ask($q, $default = 'N') { # with 'Y', pressing Enter means yes; --yes s
 }
 function Human($b) { '{0:N1} GB' -f ($b / 1e9) }
 
-$Tier = 'all'; $BudgetOverride = $null; $DryRun = $false; $Yes = $false; $NoContext = $false; $NoClaude = $false
+$Tier = 'all'; $Use = $null; $BudgetOverride = $null; $DryRun = $false; $Yes = $false; $NoContext = $false; $NoClaude = $false
 $argv = @($args)
 for ($i = 0; $i -lt $argv.Count; $i++) {
   switch -Regex ($argv[$i]) {
     '^--?tier$'       { $i++; $Tier = "$($argv[$i])".ToLower() }
+    '^--?use$'        { $i++; $Use = "$($argv[$i])".ToLower() }
     '^--?budget$'     { $i++; $BudgetOverride = "$($argv[$i])" }
     '^--?dry-?run$'   { $DryRun = $true }
     '^(--?yes|-y)$'   { $Yes = $true }
@@ -91,20 +92,40 @@ if ($BudgetOverride) {
 # Step 2: pick the tier row from models.txt and check each tag exists
 # ---------------------------------------------------------------------------
 Step 'Choosing models'
-$rows = foreach ($line in Get-Content $ModelsFile) {
-  $cells = ($line -replace '#.*', '').Trim() -split '\s+'
+# models.txt has one "[use] description" section per use; rows before any section count as coding.
+$uses = [ordered]@{}; $rows = @(); $section = 'coding'
+foreach ($line in Get-Content $ModelsFile) {
+  $clean = ($line -replace '#.*', '').Trim()
+  if ($clean -match '^\[([a-z0-9_-]+)\]\s*(.*)$') { $section = $Matches[1]; $uses[$section] = $Matches[2]; continue }
+  $cells = $clean -split '\s+'
   if ($cells.Count -ge 4 -and $cells[0] -match '^\d+$') {
-    [pscustomobject]@{ Min = [int]$cells[0]; Specs = @($cells[1], $cells[2], $cells[3]) }
+    $rows += [pscustomobject]@{ Use = $section; Min = [int]$cells[0]; Specs = @($cells[1], $cells[2], $cells[3]) }
   }
 }
-$fits = @($rows | Where-Object { $_.Min -le $Budget } | Sort-Object Min)
-if ($fits.Count -eq 0) { Die "No row in models.txt fits a ${Budget}GB budget." }
+if ($uses.Count -eq 0) { $uses['coding'] = 'Writing and fixing code' }
+$useNames = @($uses.Keys)
+if (-not $Use) {
+  $Use = $useNames[0]
+  if (-not $Yes -and $useNames.Count -gt 1) {
+    Say 'What will you mainly use these models for? The best models differ a lot by task.'
+    for ($n = 0; $n -lt $useNames.Count; $n++) { Say ('  {0}) {1,-9} {2}' -f ($n + 1), $useNames[$n], $uses[$useNames[$n]]) }
+    while ($true) {
+      $answer = (Read-Host 'Choose a number [1]').Trim()
+      if ($answer -eq '') { break }
+      if ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $useNames.Count) { $Use = $useNames[[int]$answer - 1]; break }
+      Warn 'Please type one of the numbers above.'
+    }
+  }
+}
+if ($useNames -notcontains $Use) { Die "Unknown --use '$Use'. Choose from: $($useNames -join ', ')" }
+$fits = @($rows | Where-Object { $_.Use -eq $Use -and $_.Min -le $Budget } | Sort-Object Min)
+if ($fits.Count -eq 0) { Die "No row in the [$Use] section of models.txt fits a ${Budget}GB budget." }
 $row = $fits[-1]
 if (-not $HasGpu -and -not $BudgetOverride -and $row.Min -ge 16 -and $fits.Count -gt 1) {
   Warn "Without a GPU the $($row.Min)GB row would be painfully slow, so using the $($fits[-2].Min)GB row instead."
   $row = $fits[-2]
 }
-Say "Using the $($row.Min)GB+ row of models.txt"
+Say "Using the $($row.Min)GB+ row of the [$Use] models (choose another use with --use)"
 
 function Get-ManifestSize($tag) { # -> 'missing', 'unknown', or total download bytes
   $name, $ver = $tag -split ':', 2
@@ -125,6 +146,7 @@ $tierNames = 'light', 'medium', 'heavy'
 $plan = @(); $missing = @()
 foreach ($n in 0..2) {   # O(tiers x fallbacks): a handful of registry lookups
   if ($want -notcontains $tierNames[$n]) { continue }
+  if ($row.Specs[$n] -eq '-') { continue }   # "-" in models.txt means no model for this tier
   $alts = $row.Specs[$n] -split '\|'
   $pick = $null
   foreach ($alt in $alts) {
@@ -239,7 +261,7 @@ function Test-Installed($tag) { return ($installed -contains $tag) -or ($install
 # Step 3b: install or update Claude Code, which `ollama launch claude` starts
 # ---------------------------------------------------------------------------
 $claude = $null
-if (-not $NoClaude) {
+if (-not $NoClaude -and $Use -eq 'coding') {
   Step 'Checking Claude Code'
   $cmd = Get-Command claude -ErrorAction SilentlyContinue
   if ($cmd) { $claude = $cmd.Source }
@@ -326,15 +348,18 @@ if (-not $NoContext) {
 # Step 6: what's installed and how to use it
 # ---------------------------------------------------------------------------
 Step 'All done'
-$uses = @{
-  light  = 'quick questions, explanations and autocomplete (fastest)'
-  medium = 'everyday coding: writing functions, fixing bugs, reviews'
-  heavy  = 'hard problems, big refactors and agent work (slowest, smartest)'
+$tierUses = @{ light = 'fastest, for quick tasks'; medium = 'balanced, for everyday use'; heavy = 'best quality, slowest' }
+if ($Use -eq 'coding') {
+  $tierUses = @{
+    light  = 'quick questions, explanations and autocomplete (fastest)'
+    medium = 'everyday coding: writing functions, fixing bugs, reviews'
+    heavy  = 'hard problems, big refactors and agent work (slowest, smartest)'
+  }
 }
 $first = $null
 foreach ($p in $plan) {
   if ($failed -contains $p.Tag) { continue }
-  $use = $uses[$p.Tier]
+  $use = $tierUses[$p.Tier]
   if (Test-Installed $p.Tag) { $use += ' [already had it]' }
   Say ('  {0,-7} {1,-28} {2}' -f $p.Tier, $p.Tag, $use)
   if (-not $first) { $first = $p.Tag }
@@ -342,7 +367,7 @@ foreach ($p in $plan) {
 if (-not $first) { Say '  No models were installed this time.' }
 Say ''
 if ($first) { Say "Try a model:          ollama run $first" }
-Say 'Use with Claude Code: ollama launch claude   (then pick a model)'
+if ($Use -eq 'coding') { Say 'Use with Claude Code: ollama launch claude   (then pick a model)' }
 if ($claude -and -not (Get-Command claude -ErrorAction SilentlyContinue)) { Say "                      (open a new PowerShell window first so 'claude' is on your PATH)" }
 Say 'Remove a model:       ollama rm <model>'
 if ($missing.Count) { Warn "Skipped because the tag wasn't found: $($missing -join ', ')" }
